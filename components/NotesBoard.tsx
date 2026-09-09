@@ -1,11 +1,13 @@
 "use client"
 
 import { apiFetch } from "@/lib/base"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import type { Note, Reaction, User } from "@/lib/db"
 import { CATEGORIES, initials, timeAgo } from "@/lib/links"
-import { IconDown, IconLink, IconPlay, IconPlus, IconSearch, IconTrash, IconUp } from "./Icons"
+import { IconDown, IconPlus, IconSearch, IconTrash, IconUp } from "./Icons"
 import ConfirmDialog from "./ConfirmDialog"
+import TileArt from "./TileArt"
+import { artAtTop, artFor, ASPECT, assignSwatches, hashId, sizeFor } from "@/lib/mosaic"
 
 type Preview = {
   provider: string
@@ -14,6 +16,8 @@ type Preview = {
   thumbnail: string | null
   embedUrl: string | null
 }
+
+type FieldName = "title" | "description" | "category" | "tags"
 
 export default function NotesBoard({
   me,
@@ -40,15 +44,22 @@ export default function NotesBoard({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Note | null>(null)
+
+  // --- AI box state ---------------------------------------------------------
+  const [raw, setRaw] = useState("")
   const [organizing, setOrganizing] = useState(false)
-  const [organized, setOrganized] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiDrafted, setAiDrafted] = useState(false)
+  const [askReplace, setAskReplace] = useState(false)
+  const [flash, setFlash] = useState<Record<string, boolean>>({})
+  const timers = useRef<Array<ReturnType<typeof setTimeout>>>([])
 
   const [query, setQuery] = useState("")
-  const [cat, setCat] = useState<string | null>(null)
   const [authorFilter, setAuthorFilter] = useState<string | null>(null)
 
   useEffect(() => setNotes(initialNotes), [initialNotes])
   useEffect(() => setReactions(initialReactions), [initialReactions])
+  useEffect(() => () => timers.current.forEach(clearTimeout), [])
 
   const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
 
@@ -62,26 +73,29 @@ export default function NotesBoard({
     return map
   }, [reactions])
 
-  // Built-in suggestions plus every custom category the team has typed.
   const allCategories = useMemo(() => {
     const set = new Set<string>(CATEGORIES)
     for (const n of notes) if (n.category) set.add(n.category)
     return Array.from(set)
   }, [notes])
 
+  // Search matches title, description, category and tags together.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase()
     return notes.filter((n) => {
-      if (cat && n.category !== cat) return false
       if (authorFilter && n.author_id !== authorFilter) return false
       if (!q) return true
-      return [n.title, n.description, n.link_url, (n.tags || []).join(" ")]
+      return [n.title, n.description, n.category, (n.tags || []).join(" ")]
         .filter(Boolean)
         .join(" ")
         .toLowerCase()
         .includes(q)
     })
-  }, [notes, query, cat, authorFilter])
+  }, [notes, query, authorFilter])
+
+  // Colours are resolved across the rendered order so no two touching tiles
+  // share a colour, while staying stable for a given idea.
+  const swatches = useMemo(() => assignSwatches(visible.map((n) => n.id)), [visible])
 
   async function loadPreview(value: string) {
     setUrl(value)
@@ -96,33 +110,76 @@ export default function NotesBoard({
     setPreview(data?.preview || null)
   }
 
-  // Sends the rough idea to Mistral and fills the composer with a tidy
-  // title, description, category and tags.
-  async function organize() {
-    if (description.trim().length < 12) {
-      setError("Write a little more of the idea first, then organise it.")
+  /** Briefly outlines an input in orange as its value lands. */
+  function flashField(name: FieldName, delay: number, apply: () => void) {
+    timers.current.push(
+      setTimeout(() => {
+        apply()
+        setFlash((f) => ({ ...f, [name]: true }))
+        timers.current.push(
+          setTimeout(() => setFlash((f) => ({ ...f, [name]: false })), 400),
+        )
+      }, delay),
+    )
+  }
+
+  const formHasContent = () =>
+    Boolean(title.trim() || description.trim() || category.trim() || tags.trim())
+
+  function requestOrganize() {
+    if (raw.trim().length < 12) {
+      setAiError("Paste a bit more text first.")
       return
     }
+    if (formHasContent()) {
+      setAskReplace(true)
+      return
+    }
+    void organize()
+  }
+
+  /**
+   * Asks the model for strict JSON and fills the manual form with it.
+   * Nothing is written to the database here — the user still presses Save.
+   */
+  async function organize() {
     setOrganizing(true)
-    setError(null)
+    setAiError(null)
     try {
-      const res = await apiFetch("/api/organize", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: description, title }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        setError(data?.error || "Could not organise the idea")
+      let result: Record<string, unknown> | null = null
+
+      // One retry, because a malformed reply is usually transient.
+      for (let attempt = 0; attempt < 2 && !result; attempt++) {
+        const res = await apiFetch("/api/organize", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ text: raw }),
+        })
+        const data = await res.json().catch(() => null)
+        if (res.status === 401 || res.status === 429) {
+          setAiError(data?.error || "Too many requests — wait a moment and try again.")
+          return
+        }
+        const candidate = data?.result
+        if (candidate && typeof candidate.title === "string" && candidate.title.trim()) {
+          result = candidate
+        }
+      }
+
+      if (!result) {
+        setAiError("Couldn’t organize that — try again, or fill the fields manually.")
         return
       }
-      const r = data.result || {}
-      if (r.title) setTitle(r.title)
-      if (r.description) setDescription(r.description)
-      if (r.category && !category.trim()) setCategory(r.category)
-      if (Array.isArray(r.tags) && r.tags.length && !tags.trim()) setTags(r.tags.join(", "))
-      setOrganized(true)
-      setTimeout(() => setOrganized(false), 2400)
+
+      // Fill in sequence so it reads as the form being written into.
+      const list = Array.isArray(result.tags) ? (result.tags as string[]) : []
+      flashField("title", 0, () => setTitle(String(result!.title || "").slice(0, 80)))
+      flashField("description", 80, () => setDescription(String(result!.description || "")))
+      flashField("category", 160, () => setCategory(String(result!.category || "")))
+      flashField("tags", 240, () => setTags(list.join(", ")))
+      setAiDrafted(true)
+    } catch {
+      setAiError("Couldn’t organize that — try again, or fill the fields manually.")
     } finally {
       setOrganizing(false)
     }
@@ -157,10 +214,11 @@ export default function NotesBoard({
     setTags("")
     setUrl("")
     setPreview(null)
+    setRaw("")
+    setAiDrafted(false)
     setOpen(false)
   }
 
-  // Optimistic: the UI flips instantly, the request settles in the background.
   async function react(noteId: string, value: 1 | -1) {
     const mine = reactions.find((r) => r.note_id === noteId && r.user_id === me.id)
     const snapshot = reactions
@@ -196,7 +254,7 @@ export default function NotesBoard({
     <>
       {pendingDelete ? (
         <ConfirmDialog
-          title={"Delete \u201c" + pendingDelete.title + "\u201d?"}
+          title={"Delete “" + pendingDelete.title + "”?"}
           message="This idea and its reactions will be removed for the whole team. This can’t be undone."
           confirmLabel="Delete note"
           onConfirm={() => {
@@ -207,90 +265,155 @@ export default function NotesBoard({
           onCancel={() => setPendingDelete(null)}
         />
       ) : null}
-      {open ? (
-        <div className="composer">
-          {error ? <div className="error">{error}</div> : null}
-          <label className="field-label">Idea title (required)</label>
-          <input
-            className="input input-lg"
-            placeholder="Give the idea a short name…"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            autoFocus
-          />
-          <textarea
-            className="textarea"
-            placeholder="Description (required) — context, why it matters, what to do next…"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <div className="composer-grid">
-            <input
-              className="input"
-              placeholder="Link (optional) — YouTube, Instagram, Facebook, anything"
-              value={url}
-              onChange={(e) => loadPreview(e.target.value)}
-            />
-            <input
-              className="input"
-              list="ohq-categories"
-              placeholder="Category (optional, type your own)"
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-            />
-            <datalist id="ohq-categories">
-              {allCategories.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
-            <input
-              className="input"
-              placeholder="Tags (optional, comma separated)"
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-            />
-          </div>
 
-          {loadingPreview ? (
-            <div className="preview-strip">
-              <span className="meta">Fetching preview…</span>
+      {askReplace ? (
+        <ConfirmDialog
+          title="Replace what you’ve written?"
+          message="The title, description, category and tags you have already filled in will be overwritten by the AI draft."
+          confirmLabel="Replace"
+          onConfirm={() => {
+            setAskReplace(false)
+            void organize()
+          }}
+          onCancel={() => setAskReplace(false)}
+        />
+      ) : null}
+
+      {open ? (
+        <div className="composer-split">
+          <div className="composer">
+            {error ? <div className="error">{error}</div> : null}
+            {aiDrafted ? (
+              <div className="ai-note">Drafted by AI — review and edit before saving.</div>
+            ) : null}
+
+            <label className="field-label">Idea title (required)</label>
+            <input
+              className={"input input-lg" + (flash.title ? " filled" : "")}
+              placeholder="Give the idea a short name…"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              autoFocus
+            />
+            <textarea
+              className={"textarea" + (flash.description ? " filled" : "")}
+              placeholder="Description (required) — context, why it matters, what to do next…"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+            <div className="composer-grid">
+              <input
+                className="input"
+                placeholder="Link (optional) — YouTube, Instagram, Facebook, anything"
+                value={url}
+                onChange={(e) => loadPreview(e.target.value)}
+              />
+              <input
+                className={"input" + (flash.category ? " filled" : "")}
+                list="ohq-categories"
+                placeholder="Category (optional, type your own)"
+                value={category}
+                onChange={(e) => setCategory(e.target.value)}
+              />
+              <datalist id="ohq-categories">
+                {allCategories.map((c) => (
+                  <option key={c} value={c} />
+                ))}
+              </datalist>
+              <input
+                className={"input" + (flash.tags ? " filled" : "")}
+                placeholder="Tags (optional, comma separated)"
+                value={tags}
+                onChange={(e) => setTags(e.target.value)}
+              />
             </div>
-          ) : preview ? (
-            <div className="preview-strip">
-              {preview.thumbnail ? <img src={preview.thumbnail} alt="" /> : null}
-              <div style={{ minWidth: 0 }}>
-                <div className="eyebrow">{preview.provider}</div>
-                <div style={{ fontSize: 13.5, fontWeight: 600 }}>
-                  {preview.title || preview.url}
+
+            {loadingPreview ? (
+              <div className="preview-strip">
+                <span className="meta">Fetching preview…</span>
+              </div>
+            ) : preview ? (
+              <div className="preview-strip">
+                {preview.thumbnail ? <img src={preview.thumbnail} alt="" /> : null}
+                <div style={{ minWidth: 0 }}>
+                  <div className="eyebrow">{preview.provider}</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600 }}>
+                    {preview.title || preview.url}
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : null}
+            ) : null}
 
-          <div className="composer-row" style={{ marginTop: 14 }}>
-            <button
-              className={"btn btn-ai" + (organizing ? " busy" : "") + (organized ? " done" : "")}
-              onClick={organize}
-              disabled={organizing || saving}
-              title="Let Mistral tidy the title, description, category and tags"
-            >
-              <span className="ai-spark" aria-hidden="true" />
-              {organizing ? "Organising\u2026" : organized ? "Organised" : "Organise with AI"}
-            </button>
-            <button className="btn btn-accent" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : "Save idea"}
-            </button>
-            <button className="btn btn-ghost" onClick={() => setOpen(false)}>
-              Cancel
-            </button>
-            <div style={{ flex: 1 }} />
-            <span className="author">
-              <span className="avatar" style={{ background: me.color }}>
-                {initials(me.display_name)}
+            <div className="composer-row" style={{ marginTop: 14 }}>
+              <button className="btn btn-accent" onClick={save} disabled={saving}>
+                {saving ? "Saving…" : "Save idea"}
+              </button>
+              <button className="btn btn-ghost" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <div style={{ flex: 1 }} />
+              <span className="author">
+                <span className="avatar" style={{ background: me.color }}>
+                  {initials(me.display_name)}
+                </span>
+                posting as {me.display_name}
               </span>
-              posting as {me.display_name}
-            </span>
+            </div>
           </div>
+
+          <aside className="ai-box">
+            <svg
+              className="ai-box-art"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="xMidYMid slice"
+              aria-hidden="true"
+            >
+              <g fill="none" stroke="#EDEAE0" strokeWidth="1" vectorEffect="non-scaling-stroke">
+                <circle cx="88" cy="14" r="58" />
+                <circle cx="88" cy="14" r="42" />
+                <circle cx="88" cy="14" r="26" />
+                <circle cx="88" cy="14" r="12" />
+              </g>
+            </svg>
+
+            <div className="ai-eyebrow">Paste anything</div>
+            <p className="ai-help">
+              Drop a long note, a message, a transcript. It gets sorted into fields you can edit.
+            </p>
+
+            <textarea
+              className="ai-textarea"
+              placeholder="Paste your raw thoughts here — as long and as messy as you like."
+              value={raw}
+              onChange={(e) => setRaw(e.target.value)}
+            />
+
+            {aiError ? <div className="ai-error">{aiError}</div> : null}
+
+            <div className="ai-foot">
+              <span className="ai-count">{raw.length} characters</span>
+              <div className="ai-actions">
+                <button
+                  className="ai-clear"
+                  onClick={() => {
+                    setRaw("")
+                    setAiError(null)
+                  }}
+                  disabled={organizing || !raw}
+                >
+                  Clear
+                </button>
+                <button
+                  className={"ai-run" + (organizing ? " busy" : "")}
+                  onClick={requestOrganize}
+                  disabled={organizing}
+                >
+                  <span className="ai-diamond" aria-hidden="true" />
+                  {organizing ? "Organizing…" : "Organize with AI"}
+                </button>
+              </div>
+            </div>
+          </aside>
         </div>
       ) : null}
 
@@ -300,7 +423,7 @@ export default function NotesBoard({
             <IconPlus /> New note
           </button>
         ) : null}
-        <div className="search">
+        <div className="search search-wide">
           <IconSearch />
           <input
             className="input"
@@ -310,21 +433,6 @@ export default function NotesBoard({
             aria-label="Search ideas"
           />
         </div>
-        <div className="chip-row">
-          <button className={"chip" + (cat === null ? " on" : "")} onClick={() => setCat(null)}>
-            All
-          </button>
-          {allCategories.map((c) => (
-            <button
-              key={c}
-              className={"chip" + (cat === c ? " on" : "")}
-              onClick={() => setCat(cat === c ? null : c)}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-        <div style={{ flex: 1 }} />
         <div className="chip-row">
           {users.map((u) => (
             <button
@@ -347,8 +455,8 @@ export default function NotesBoard({
           Nothing here yet. Hit <b>New note</b> and drop the first idea.
         </div>
       ) : (
-        <div className="grid">
-          {visible.map((note) => {
+        <div className="mosaic">
+          {visible.map((note, index) => {
             const author = userMap.get(note.author_id)
             const list = reactionsByNote.get(note.id) || []
             const ups = list.filter((r) => r.value === 1)
@@ -357,94 +465,47 @@ export default function NotesBoard({
             const names = (arr: Reaction[]) =>
               arr.map((r) => userMap.get(r.user_id)?.display_name || "Someone").join(", ")
 
-            return (
-              <article className="note" key={note.id}>
-                <div
-                  className="note-accent"
-                  style={{ background: author?.color || "var(--line-strong)" }}
-                />
-                {note.link_thumbnail ? (
-                  <div className="note-media">
-                    <img src={note.link_thumbnail} alt="" loading="lazy" />
-                    {note.link_embed_url ? (
-                      <a
-                        className="play"
-                        href={note.link_url || "#"}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label="Open video"
-                      >
-                        <span>
-                          <IconPlay />
-                        </span>
-                      </a>
-                    ) : null}
-                    {note.link_provider ? (
-                      <span className="provider-tag">{note.link_provider}</span>
-                    ) : null}
-                  </div>
-                ) : null}
+            const hash = hashId(note.id)
+            const size = sizeFor(hash)
+            const swatch = swatches[index]
+            const topArt = artAtTop(hash)
 
-                <div className="note-body">
-                  <div className="note-cat">{note.category}</div>
-                  <h3 className="note-title">{note.title}</h3>
-                  {note.description ? <p className="note-desc">{note.description}</p> : null}
-                  {note.link_url ? (
-                    <a className="note-link" href={note.link_url} target="_blank" rel="noreferrer">
-                      <IconLink />
-                      {note.link_title || note.link_url}
-                    </a>
-                  ) : null}
-                  {note.tags && note.tags.length ? (
-                    <div className="note-tags">
-                      {note.tags.map((t) => (
-                        <span className="tag" key={t}>
-                          #{t}
-                        </span>
-                      ))}
-                    </div>
+            return (
+              <article
+                className={"tile tile-" + size + (topArt ? " art-top" : "")}
+                key={note.id}
+                style={{
+                  background: swatch.bg,
+                  color: swatch.fg,
+                  ["--tile-ink" as string]: swatch.fg,
+                  ["--tile-aspect" as string]: ASPECT[size],
+                }}
+              >
+                <TileArt variant={artFor(hash)} color={swatch.fg} />
+
+                <div className="tile-copy">
+                  <div className="tile-cat">{note.category || "Idea"}</div>
+                  <h3 className="tile-title">{note.title}</h3>
+                  {size !== "short" && note.description ? (
+                    <p className="tile-desc">{note.description}</p>
                   ) : null}
                 </div>
 
-                {ups.length || downs.length ? (
-                  <div className="reactors">
-                    {ups.length ? (
-                      <div className="reactors-row">
-                        <b>Liked</b> <span>{names(ups)}</span>
-                      </div>
-                    ) : null}
-                    {downs.length ? (
-                      <div className="reactors-row">
-                        <b>Not for me</b> <span>{names(downs)}</span>
-                      </div>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                <div className="note-foot">
-                  <span className="author">
-                    <span
-                      className="avatar"
-                      style={{ background: author?.color || "#8d8a84" }}
-                      title={author?.display_name || "Unknown"}
-                    >
-                      {initials(author?.display_name || "?")}
-                    </span>
-                    <span>
-                      <span style={{ fontWeight: 600 }}>{author?.display_name || "Unknown"}</span>
-                      <span className="meta"> · {timeAgo(note.created_at)}</span>
-                    </span>
+                <div className="tile-foot">
+                  <span className="tile-author">
+                    <span className="tile-dot" style={{ background: author?.color || "#8d8a84" }} />
+                    {author?.display_name || "Unknown"} · {timeAgo(note.created_at)}
                   </span>
-                  <span className="react-group">
+                  <span className="tile-votes">
                     <button
-                      className={"react" + (mine === 1 ? " on-up" : "")}
+                      className={"tile-vote" + (mine === 1 ? " on" : "")}
                       onClick={() => react(note.id, 1)}
                       title={ups.length ? "Liked by " + names(ups) : "Like this"}
                     >
                       <IconUp /> {ups.length}
                     </button>
                     <button
-                      className={"react" + (mine === -1 ? " on-down" : "")}
+                      className={"tile-vote" + (mine === -1 ? " on" : "")}
                       onClick={() => react(note.id, -1)}
                       title={downs.length ? "Disliked by " + names(downs) : "Not for me"}
                     >
@@ -452,10 +513,10 @@ export default function NotesBoard({
                     </button>
                     {note.author_id === me.id ? (
                       <button
-                        className="react"
+                        className="tile-vote"
                         onClick={() => setPendingDelete(note)}
-                        title="Delete my note"
                         aria-label="Delete my note"
+                        title="Delete my note"
                       >
                         <IconTrash />
                       </button>

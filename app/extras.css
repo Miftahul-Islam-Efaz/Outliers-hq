@@ -1635,3 +1635,319 @@ textarea {
   background: var(--muted);
   box-shadow: none;
 }
+
+/* --- Idea mosaic (pass 9) -------------------------------------------------- */
+/* True masonry via CSS multi-column: tiles of different heights pack with no
+   gaps. Solid colour blocks only - no card chrome of any kind. */
+.mosaic {
+  columns: 3;
+  column-gap: 8px;
+  width: 100%;
+  max-width: none;
+  margin-top: 18px;
+}
+
+@media (min-width: 1280px) {
+  .mosaic { columns: 4; }
+}
+@media (max-width: 1279px) and (min-width: 900px) {
+  .mosaic { columns: 3; }
+}
+@media (max-width: 899px) and (min-width: 600px) {
+  .mosaic { columns: 2; }
+}
+@media (max-width: 599px) {
+  .mosaic { columns: 1; }
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  break-inside: avoid;
+  -webkit-column-break-inside: avoid;
+  page-break-inside: avoid;
+  margin: 0 0 8px;
+  padding: 20px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background-clip: padding-box;
+  /* The aspect ratio is a floor: long titles push the tile taller rather
+     than ever clipping or ellipsising the text. */
+  min-height: 0;
+}
+
+/* aspect-ratio sets the preferred height. Because the height stays auto,
+   a long title simply pushes the tile taller instead of being clipped. */
+.tile-short { aspect-ratio: 1 / 0.75; }
+.tile-square { aspect-ratio: 1 / 1; }
+.tile-tall { aspect-ratio: 1 / 1.4; }
+
+/* Text and art take opposite ends of the tile. */
+.tile-copy { position: relative; z-index: 2; }
+.tile.art-top { flex-direction: column-reverse; }
+.tile.art-top .tile-foot { margin-top: 0; }
+
+.tile-art {
+  position: absolute;
+  left: -12%;
+  width: 124%;
+  height: 62%;
+  bottom: -8%;
+  opacity: 0.3;
+  transition: opacity 300ms ease;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.tile.art-top .tile-art {
+  bottom: auto;
+  top: -8%;
+}
+
+.tile:hover .tile-art { opacity: 0.55; }
+
+.tile-cat {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 10px;
+}
+
+.tile-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 23px;
+  line-height: 1.15;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  margin: 0;
+  max-width: 90%;
+  overflow-wrap: anywhere;
+}
+
+.tile-desc {
+  font-size: 13px;
+  line-height: 1.45;
+  opacity: 0.8;
+  max-width: 90%;
+  margin: 10px 0 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.tile-foot {
+  position: relative;
+  z-index: 2;
+  margin-top: auto;
+  padding-top: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.tile-author {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tile-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.tile-votes { display: inline-flex; gap: 4px; flex: none; }
+
+/* Outline-only, inheriting the tile's own text colour. */
+.tile-vote {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 160ms ease;
+}
+
+.tile-vote:hover { opacity: 1; }
+.tile-vote.on { opacity: 1; font-weight: 700; }
+.tile-vote svg { width: 12px; height: 12px; }
+
+/* --- Split composer + AI box ---------------------------------------------- */
+.composer-split {
+  display: grid;
+  grid-template-columns: 60% 40%;
+  gap: 20px;
+  align-items: start;
+  margin-bottom: 18px;
+}
+
+@media (max-width: 899px) {
+  .composer-split {
+    grid-template-columns: 1fr;
+  }
+  /* AI box on top when stacked. */
+  .composer-split .ai-box { order: -1; }
+}
+
+.composer-split .composer { margin-bottom: 0; }
+
+.ai-note {
+  font-size: 12px;
+  opacity: 0.75;
+  margin-bottom: 10px;
+}
+
+/* The orange border flash as a value lands in a field. */
+.input.filled,
+.textarea.filled {
+  animation: fieldFill 400ms ease;
+}
+
+@keyframes fieldFill {
+  0% { border-color: #F0532A; box-shadow: 0 0 0 3px rgba(240, 83, 42, 0.18); }
+  100% { border-color: var(--line); box-shadow: none; }
+}
+
+.ai-box {
+  position: relative;
+  overflow: hidden;
+  background: #2B302A;
+  color: #EDEAE0;
+  border: 0;
+  border-radius: 4px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-box-art {
+  position: absolute;
+  top: -40px;
+  right: -60px;
+  width: 220px;
+  height: 220px;
+  opacity: 0.15;
+  pointer-events: none;
+}
+
+.ai-eyebrow,
+.ai-help,
+.ai-textarea,
+.ai-foot,
+.ai-error { position: relative; z-index: 2; }
+
+.ai-eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.ai-help {
+  font-size: 12.5px;
+  line-height: 1.5;
+  opacity: 0.6;
+  margin: 6px 0 14px;
+  max-width: 34ch;
+}
+
+.ai-textarea {
+  min-height: 220px;
+  width: 100%;
+  resize: vertical;
+  background: transparent;
+  border: 1px solid rgba(237, 234, 224, 0.2);
+  border-radius: 3px;
+  color: #EDEAE0;
+  font-size: 14px;
+  line-height: 1.6;
+  padding: 12px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 160ms ease;
+}
+
+.ai-textarea::placeholder { color: rgba(237, 234, 224, 0.4); }
+.ai-textarea:focus { border-color: rgba(237, 234, 224, 0.45); }
+
+.ai-error {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #FFB4A0;
+}
+
+.ai-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.ai-count { font-size: 11px; opacity: 0.5; }
+.ai-actions { display: inline-flex; align-items: center; gap: 10px; }
+
+.ai-clear {
+  background: none;
+  border: 0;
+  color: #EDEAE0;
+  opacity: 0.6;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 6px 2px;
+}
+
+.ai-clear:hover:not(:disabled) { opacity: 1; }
+.ai-clear:disabled { opacity: 0.25; cursor: default; }
+
+.ai-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #F0532A;
+  color: #fff;
+  border: 0;
+  border-radius: 3px;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 9px 14px;
+  cursor: pointer;
+  transition: filter 160ms ease;
+}
+
+.ai-run:hover:not(:disabled) { filter: brightness(1.07); }
+.ai-run:disabled { cursor: default; }
+.ai-run.busy { animation: aiPulse 1.4s ease-in-out infinite; }
+
+.ai-diamond {
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  transform: rotate(45deg);
+  flex: none;
+}
+
+.search-wide { flex: 1 1 420px; max-width: none; }
