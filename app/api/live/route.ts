@@ -1,6 +1,7 @@
 import { currentUser } from "@/lib/auth"
 import {
   join,
+  touch,
   leave,
   presenceOf,
   publish,
@@ -14,6 +15,7 @@ export const runtime = "nodejs"
 // Events a browser is allowed to publish. Anything else is dropped.
 const ALLOWED = new Set<LiveEvent["type"]>([
   "cursor",
+  "ping",
   "editing",
   "item.upsert",
   "item.remove",
@@ -116,6 +118,12 @@ export async function POST(req: Request) {
     return new Response("Bad request", { status: 400 })
   }
 
+  // Keep-alive from the browser: mark the client fresh and stop there.
+  if (type === "ping") {
+    touch(boardId, clientId)
+    return Response.json({ ok: true })
+  }
+
   if (type === "editing") {
     const itemId = (body?.payload as { itemId?: string } | null)?.itemId || null
     setEditing(boardId, clientId, itemId)
@@ -123,6 +131,7 @@ export async function POST(req: Request) {
   }
 
   // senderId always comes from the session, never from the request body.
+  touch(boardId, clientId)
   publish({ type, boardId, senderId: user.id, clientId, payload: body?.payload }, clientId)
   return Response.json({ ok: true })
 }

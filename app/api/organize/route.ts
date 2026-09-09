@@ -5,10 +5,19 @@ import { CATEGORIES } from "@/lib/links"
 
 export const dynamic = "force-dynamic"
 
-// One tidy-up per user every few seconds is plenty, and it keeps a stuck
-// button from spending the shared free-tier budget.
+/**
+ * Per-user throttle.
+ *
+ * This used to be stamped *before* the model call, so a failed attempt still
+ * burned the window and the client's own retry immediately came back 429.
+ * That is what made the button look broken: one click, two requests, and a
+ * confusing "wait a couple of seconds" message. Now a run is only recorded
+ * once it actually reaches Mistral, and an in-flight guard stops double
+ * submissions instead of rate-limiting them.
+ */
 const lastRun = new Map<string, number>()
-const USER_GAP_MS = 4000
+const inFlight = new Set<string>()
+const USER_GAP_MS = 1500
 
 const SYSTEM = [
   "You tidy up rough product ideas for a small team's idea board.",
@@ -36,12 +45,24 @@ function parseReply(raw: string) {
 
 export async function POST(req: Request) {
   const user = await currentUser()
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  if (!user) {
+    return NextResponse.json(
+      { error: "Your session expired. Reload the page and sign in again." },
+      { status: 401 },
+    )
+  }
+
+  if (inFlight.has(user.id)) {
+    return NextResponse.json(
+      { error: "Still organising your last paste \u2014 hang on a second." },
+      { status: 429 },
+    )
+  }
 
   const since = Date.now() - (lastRun.get(user.id) || 0)
   if (since < USER_GAP_MS) {
     return NextResponse.json(
-      { error: "Give it a couple of seconds before organising again." },
+      { error: "Give it a second before organising again." },
       { status: 429 },
     )
   }
@@ -57,7 +78,7 @@ export async function POST(req: Request) {
     )
   }
 
-  lastRun.set(user.id, Date.now())
+  inFlight.add(user.id)
 
   try {
     const reply = await chat(
@@ -73,6 +94,8 @@ export async function POST(req: Request) {
       ],
       { jsonObject: true, maxTokens: 500, temperature: 0.2 },
     )
+
+    lastRun.set(user.id, Date.now())
 
     const parsed = parseReply(reply)
     if (!parsed) {
@@ -95,6 +118,10 @@ export async function POST(req: Request) {
   } catch (err) {
     const status = err instanceof MistralError ? err.status : 502
     const message = err instanceof Error ? err.message : "Could not organise the idea"
-    return NextResponse.json({ error: message }, { status })
+    // Configuration problems (missing/blocked key) should not be retried by
+    // the client, so mark them.
+    return NextResponse.json({ error: message, fatal: status === 503 }, { status })
+  } finally {
+    inFlight.delete(user.id)
   }
 }

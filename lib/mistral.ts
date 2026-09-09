@@ -1,4 +1,4 @@
-import { getSetting } from "./settings"
+import { getSetting, settingsError } from "./settings"
 
 /**
  * A small, well-behaved Mistral client.
@@ -75,8 +75,12 @@ export async function chat(messages: Array<{ role: string; content: string }>, o
 }) {
   const apiKey = await getSetting("mistral_api_key")
   if (!apiKey) {
+    // Say exactly why. "No key" and "key is there but unreadable" are very
+    // different problems and used to look identical from the browser.
+    const why = await settingsError()
     throw new MistralError(
-      "No Mistral API key yet. Add one in Supabase under the app_settings table (key: mistral_api_key).",
+      why ||
+        "No Mistral API key yet. Add one in Supabase under the app_settings table (key: mistral_api_key).",
       503,
     )
   }
@@ -122,9 +126,28 @@ export async function chat(messages: Array<{ role: string; content: string }>, o
 
       if (status === 401 || status === 403) {
         throw new MistralError(
-          "Mistral rejected the API key. Check the mistral_api_key value in Supabase.",
+          "Mistral rejected the API key. Check the mistral_api_key value in Supabase (it should be the full key, with no quotes or spaces).",
           502,
         )
+      }
+
+      if (status === 404 || status === 400) {
+        // Almost always a bad model id in app_settings.mistral_model.
+        let detail = ""
+        try {
+          detail = String((JSON.parse(text) as { message?: string })?.message || "")
+        } catch {
+          detail = ""
+        }
+        if (/model/i.test(detail) || status === 404) {
+          throw new MistralError(
+            'Mistral does not recognise the model "' +
+              model +
+              '". Fix mistral_model in Supabase (for example: mistral-small-latest).',
+            502,
+          )
+        }
+        throw new MistralError(detail || "Mistral rejected the request", 502)
       }
 
       if (status === 429 || status >= 500) {
