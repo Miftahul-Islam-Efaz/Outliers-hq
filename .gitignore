@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# next build output
+.next/
+out/
+
+# env & secrets
+.env
+.env.local
+.env*.local
+
+# logs / pid files
+*.log
+*.pid
+
+# os / editor
+.DS_Store
+.vscode/

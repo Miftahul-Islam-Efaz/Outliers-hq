@@ -1,0 +1,1669 @@
+"use client"
+
+import { apiFetch } from "@/lib/base"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type { BoardEdge, BoardItem, ItemStyle, User } from "@/lib/db"
+import { initials } from "@/lib/links"
+import LinkModal from "./LinkModal"
+import {
+  IconCard,
+  IconConnect,
+  IconLink,
+  IconMinus,
+  IconPlus,
+  IconSticky,
+  IconTarget,
+  IconTrash,
+} from "./Icons"
+import {
+  IconAlignCenter,
+  IconAlignLeft,
+  IconAlignRight,
+  IconCursor,
+  IconDiamond,
+  IconDuplicate,
+  IconEllipse,
+  IconFit,
+  IconPen,
+  IconRedo,
+  IconRound,
+  IconShapes,
+  IconSquare,
+  IconText,
+  IconTriangle,
+  IconUndo,
+} from "./ToolIcons"
+
+type Tool = "select" | "card" | "sticky" | "text" | "shape" | "pen" | "link"
+
+type Drag =
+  | { kind: "pan"; startX: number; startY: number; panX: number; panY: number }
+  | {
+      kind: "move"
+      id: string
+      startX: number
+      startY: number
+      itemX: number
+      itemY: number
+      moved?: boolean
+    }
+  | {
+      kind: "resize"
+      id: string
+      startX: number
+      startY: number
+      w: number
+      h: number
+      moved?: boolean
+    }
+  | null
+
+type Wire = { fromId: string; x: number; y: number; moved: boolean }
+type Menu = { id: string; x: number; y: number }
+type Step = { undo: () => void | Promise<void>; redo: () => void | Promise<void> }
+
+const MIN_ZOOM = 0.25
+const MAX_ZOOM = 2
+const GAP = 16
+
+const SHAPES: Array<{ id: string; label: string; Icon: (p: { size?: number }) => JSX.Element }> = [
+  { id: "rect", label: "Rectangle", Icon: IconSquare },
+  { id: "round", label: "Rounded", Icon: IconRound },
+  { id: "ellipse", label: "Ellipse", Icon: IconEllipse },
+  { id: "diamond", label: "Diamond", Icon: IconDiamond },
+  { id: "triangle", label: "Triangle", Icon: IconTriangle },
+]
+
+const FILLS = ["#FFFFFF", "#FFF6E5", "#E8F1FB", "#EAF6EE", "#F5ECFC", "#FDECEC", "#111110"]
+const TEXT_COLORS = ["#111110", "#4A4844", "#FF6A00", "#2783DE", "#46A171", "#8B5CF6", "#FFFFFF"]
+
+function shapePath(shape: string, style: ItemStyle) {
+  if (shape === "freehand") return style.path || ""
+  if (shape === "diamond") return "M50 2 L98 50 L50 98 L2 50 Z"
+  if (shape === "triangle") return "M50 3 L98 97 L2 97 Z"
+  return ""
+}
+
+function clampZoom(z: number) {
+  return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, +z.toFixed(3)))
+}
+
+type Box = { x: number; y: number; width: number; height: number }
+
+function hits(a: Box, b: Box) {
+  return (
+    a.x < b.x + b.width + GAP &&
+    a.x + a.width + GAP > b.x &&
+    a.y < b.y + b.height + GAP &&
+    a.y + a.height + GAP > b.y
+  )
+}
+
+/** Push a box to the closest free slot so cards never sit on top of each other. */
+function freeSpot(box: Box, others: Box[]): Box {
+  let candidate = { ...box }
+  for (let pass = 0; pass < 80; pass++) {
+    const clash = others.find((o) => hits(candidate, o))
+    if (!clash) return candidate
+    const right = clash.x + clash.width + GAP
+    const below = clash.y + clash.height + GAP
+    const dRight = right - candidate.x
+    const dBelow = below - candidate.y
+    if (dRight <= dBelow) candidate = { ...candidate, x: right }
+    else candidate = { ...candidate, y: below }
+  }
+  return candidate
+}
+
+function CardEditor({
+  item,
+  onSave,
+  onCancel,
+}: {
+  item: BoardItem
+  onSave: (patch: { title: string; body: string }) => void
+  onCancel: () => void
+}) {
+  const [title, setTitle] = useState(item.title || "")
+  const [body, setBody] = useState(item.body || "")
+  const box = useRef<HTMLDivElement | null>(null)
+
+  return (
+    <div
+      ref={box}
+      className="item-editor"
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onBlur={(e) => {
+        if (box.current && box.current.contains(e.relatedTarget as Node)) return
+        onSave({ title, body })
+      }}
+      onKeyDown={(e) => {
+        e.stopPropagation()
+        if (e.key === "Escape") onCancel()
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSave({ title, body })
+      }}
+    >
+      <input
+        className="edit-title"
+        autoFocus
+        value={title}
+        placeholder="Card name"
+        onChange={(e) => {
+          setTitle(e.target.value)
+          onSave({ title: e.target.value, body })
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+            e.preventDefault()
+            box.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus()
+          }
+        }}
+      />
+      <textarea
+        className="edit-body"
+        value={body}
+        placeholder="Add a description…"
+        onChange={(e) => {
+          setBody(e.target.value)
+          onSave({ title, body: e.target.value })
+        }}
+      />
+      <div className="edit-hint">Saves as you type · Esc to close</div>
+    </div>
+  )
+}
+
+export default function Canvas({
+  boardId,
+  me,
+  users,
+  initialItems,
+  initialEdges,
+}: {
+  boardId: string
+  me: User
+  users: User[]
+  initialItems: BoardItem[]
+  initialEdges: BoardEdge[]
+}) {
+  const [items, setItems] = useState<BoardItem[]>(initialItems)
+  const [edges, setEdges] = useState<BoardEdge[]>(initialEdges)
+  const [pan, setPan] = useState({ x: 40, y: 30 })
+  const [zoom, setZoom] = useState(1)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [editing, setEditing] = useState<string | null>(null)
+  const [tool, setTool] = useState<Tool>("select")
+  const [shapeKind, setShapeKind] = useState("round")
+  const [shapeMenu, setShapeMenu] = useState(false)
+  const [wire, setWire] = useState<Wire | null>(null)
+  const [stroke, setStroke] = useState<{ x: number; y: number }[] | null>(null)
+  const [hoverEdge, setHoverEdge] = useState<string | null>(null)
+  const [hoverTarget, setHoverTarget] = useState<string | null>(null)
+  const [panning, setPanning] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+  const [linkPoint, setLinkPoint] = useState<{ x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<Menu | null>(null)
+  const [history, setHistory] = useState({ undo: 0, redo: 0 })
+
+  const drag = useRef<Drag>(null)
+  const wrap = useRef<HTMLDivElement | null>(null)
+  const panRef = useRef(pan)
+  const zoomRef = useRef(zoom)
+  const wireRef = useRef<Wire | null>(null)
+  const itemsRef = useRef(items)
+  panRef.current = pan
+  zoomRef.current = zoom
+  wireRef.current = wire
+  itemsRef.current = items
+  const past = useRef<Step[]>([])
+  const future = useRef<Step[]>([])
+
+  const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
+  const colorOf = (id: string) => userMap.get(id)?.color || "#8d8a84"
+  const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = setTimeout(() => setToast(null), 2600)
+    return () => clearTimeout(t)
+  }, [toast])
+
+  useEffect(() => {
+    if (!menu) return
+    function close() {
+      setMenu(null)
+    }
+    window.addEventListener("pointerdown", close)
+    return () => window.removeEventListener("pointerdown", close)
+  }, [menu])
+
+  const toBoard = useCallback((clientX: number, clientY: number) => {
+    const rect = wrap.current?.getBoundingClientRect()
+    return {
+      x: (clientX - (rect?.left || 0) - panRef.current.x) / zoomRef.current,
+      y: (clientY - (rect?.top || 0) - panRef.current.y) / zoomRef.current,
+    }
+  }, [])
+
+  const zoomTo = useCallback((next: number, clientX?: number, clientY?: number) => {
+    const rect = wrap.current?.getBoundingClientRect()
+    const target = clampZoom(next)
+    const prev = zoomRef.current
+    if (target === prev) return
+    const cx = (clientX ?? (rect ? rect.left + rect.width / 2 : 0)) - (rect?.left || 0)
+    const cy = (clientY ?? (rect ? rect.top + rect.height / 2 : 0)) - (rect?.top || 0)
+    const k = target / prev
+    setPan({ x: cx - (cx - panRef.current.x) * k, y: cy - (cy - panRef.current.y) * k })
+    setZoom(target)
+  }, [])
+
+  const zoomToFit = useCallback(() => {
+    const rect = wrap.current?.getBoundingClientRect()
+    if (!rect || items.length === 0) {
+      setZoom(1)
+      setPan({ x: 40, y: 30 })
+      return
+    }
+    const minX = Math.min(...items.map((i) => i.x))
+    const minY = Math.min(...items.map((i) => i.y))
+    const maxX = Math.max(...items.map((i) => i.x + i.width))
+    const maxY = Math.max(...items.map((i) => i.y + i.height))
+    const pad = 80
+    const next = clampZoom(
+      Math.min(
+        (rect.width - pad * 2) / (maxX - minX || 1),
+        (rect.height - pad * 2) / (maxY - minY || 1),
+      ),
+    )
+    setZoom(next)
+    setPan({
+      x: (rect.width - (maxX - minX) * next) / 2 - minX * next,
+      y: (rect.height - (maxY - minY) * next) / 2 - minY * next,
+    })
+  }, [items])
+
+  useEffect(() => {
+    const node = wrap.current
+    if (!node) return
+    function onWheel(e: WheelEvent) {
+      e.preventDefault()
+      // Scrolling zooms at the cursor. Shift or Alt pans instead.
+      if (e.shiftKey) {
+        setPan((p) => ({ x: p.x - (e.deltaX || e.deltaY), y: p.y }))
+        return
+      }
+      if (e.altKey) {
+        setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }))
+        return
+      }
+      const step = e.ctrlKey || e.metaKey ? 0.0035 : 0.0022
+      zoomTo(zoomRef.current * Math.exp(-e.deltaY * step), e.clientX, e.clientY)
+    }
+    node.addEventListener("wheel", onWheel, { passive: false })
+    return () => node.removeEventListener("wheel", onWheel)
+  }, [zoomTo])
+
+  const patchItem = useCallback(async (id: string, patch: Record<string, unknown>) => {
+    const res = await apiFetch("/api/items", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, ...patch }),
+    })
+    if (!res.ok) setToast("Could not save that change")
+  }, [])
+
+  const updateLocal = useCallback((id: string, patch: Partial<BoardItem>) => {
+    setItems((prev) => prev.map((i) => (i.id === id ? { ...i, ...patch } : i)))
+  }, [])
+
+  // Typing saves itself. The timer lives on the canvas, so closing the card
+  // (or clicking the background) can never throw away what was typed.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const queueSave = useCallback(
+    (id: string, patch: Partial<BoardItem>) => {
+      updateLocal(id, patch)
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+      saveTimer.current = setTimeout(() => {
+        patchItem(id, patch as Record<string, unknown>)
+      }, 400)
+    },
+    [patchItem, updateLocal],
+  )
+
+  const syncHistory = useCallback(() => {
+    setHistory({ undo: past.current.length, redo: future.current.length })
+  }, [])
+
+  const pushStep = useCallback(
+    (step: Step) => {
+      past.current.push(step)
+      if (past.current.length > 80) past.current.shift()
+      future.current = []
+      syncHistory()
+    },
+    [syncHistory],
+  )
+
+  const applyPatch = useCallback(
+    (id: string, patch: Partial<BoardItem>) => {
+      updateLocal(id, patch)
+      patchItem(id, patch as Record<string, unknown>)
+    },
+    [patchItem, updateLocal],
+  )
+
+  const trackPatch = useCallback(
+    (id: string, next: Partial<BoardItem>, prev: Partial<BoardItem>) => {
+      pushStep({ undo: () => applyPatch(id, prev), redo: () => applyPatch(id, next) })
+    },
+    [applyPatch, pushStep],
+  )
+
+  const createRaw = useCallback(
+    async (payload: Record<string, unknown>) => {
+      const res = await apiFetch("/api/items", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ boardId, ...payload }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.item) {
+        setToast(data?.error || "Could not add that")
+        return null
+      }
+      const item = data.item as BoardItem
+      setItems((prev) => [...prev, item])
+      setSelected(item.id)
+      return item
+    },
+    [boardId],
+  )
+
+  const dropLocal = useCallback((id: string) => {
+    setItems((prev) => prev.filter((i) => i.id !== id))
+    setEdges((prev) => prev.filter((e) => e.from_item !== id && e.to_item !== id))
+    setSelected((prev) => (prev === id ? null : prev))
+    setEditing((prev) => (prev === id ? null : prev))
+  }, [])
+
+  /** Create an item and remember it so Undo can take it back. */
+  const addItem = useCallback(
+    async (payload: Record<string, unknown>) => {
+      const item = await createRaw(payload)
+      if (!item) return null
+      const ref = { id: item.id }
+      pushStep({
+        undo: async () => {
+          dropLocal(ref.id)
+          await apiFetch("/api/items?id=" + ref.id, { method: "DELETE" })
+        },
+        redo: async () => {
+          const again = await createRaw(payload)
+          if (again) ref.id = again.id
+        },
+      })
+      return item
+    },
+    [createRaw, dropLocal, pushStep],
+  )
+
+  const removeItem = useCallback(
+    async (id: string) => {
+      const snapshot = itemsRef.current.find((i) => i.id === id)
+      dropLocal(id)
+      setMenu(null)
+      const res = await apiFetch("/api/items?id=" + id, { method: "DELETE" })
+      if (!res.ok) {
+        setToast("Could not delete that card")
+        return
+      }
+      if (!snapshot) return
+      const payload = {
+        kind: snapshot.kind,
+        shape: snapshot.shape,
+        style: snapshot.style || {},
+        title: snapshot.title || "",
+        body: snapshot.body || "",
+        linkUrl: snapshot.link_url || "",
+        x: snapshot.x,
+        y: snapshot.y,
+        width: snapshot.width,
+        height: snapshot.height,
+      }
+      const ref = { id }
+      pushStep({
+        undo: async () => {
+          const again = await createRaw(payload)
+          if (again) ref.id = again.id
+        },
+        redo: async () => {
+          dropLocal(ref.id)
+          await apiFetch("/api/items?id=" + ref.id, { method: "DELETE" })
+        },
+      })
+    },
+    [createRaw, dropLocal, pushStep],
+  )
+
+  /** Keep a box clear of every other card. */
+  const resolve = useCallback((box: Box, ignoreId?: string) => {
+    const others = itemsRef.current
+      .filter((i) => i.id !== ignoreId)
+      .map((i) => ({ x: i.x, y: i.y, width: i.width, height: i.height }))
+    return freeSpot(box, others)
+  }, [])
+
+  const undo = useCallback(async () => {
+    const step = past.current.pop()
+    if (!step) {
+      setToast("Nothing left to undo")
+      return
+    }
+    await step.undo()
+    future.current.push(step)
+    syncHistory()
+  }, [syncHistory])
+
+  const redo = useCallback(async () => {
+    const step = future.current.pop()
+    if (!step) {
+      setToast("Nothing to redo")
+      return
+    }
+    await step.redo()
+    past.current.push(step)
+    syncHistory()
+  }, [syncHistory])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      const typing =
+        !!target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && (e.key === "=" || e.key === "+")) {
+        e.preventDefault()
+        zoomTo(zoomRef.current * 1.15)
+        return
+      }
+      if (mod && e.key === "-") {
+        e.preventDefault()
+        zoomTo(zoomRef.current / 1.15)
+        return
+      }
+      if (mod && e.key === "0") {
+        e.preventDefault()
+        zoomTo(1)
+        return
+      }
+      if (mod && e.key.toLowerCase() === "z") {
+        e.preventDefault()
+        if (e.shiftKey) redo()
+        else undo()
+        return
+      }
+      if (mod && e.key.toLowerCase() === "y") {
+        e.preventDefault()
+        redo()
+        return
+      }
+      if (typing) return
+      if ((e.key === "Delete" || e.key === "Backspace") && selected) {
+        e.preventDefault()
+        removeItem(selected)
+        return
+      }
+      if (e.key === "Escape") {
+        setWire(null)
+        setTool("select")
+        setShapeMenu(false)
+        setSelected(null)
+        setMenu(null)
+        return
+      }
+      if ((e.key === "Enter" || e.key === "F2") && selected && !editing) {
+        e.preventDefault()
+        setEditing(selected)
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [selected, editing, removeItem, zoomTo, undo, redo])
+
+  const connect = useCallback(
+    async (fromId: string, toId: string) => {
+      if (fromId === toId) return
+      const exists = edges.some(
+        (e) =>
+          (e.from_item === fromId && e.to_item === toId) ||
+          (e.from_item === toId && e.to_item === fromId),
+      )
+      if (exists) {
+        setToast("Those two are already connected")
+        return
+      }
+      const temp: BoardEdge = {
+        id: "tmp-" + fromId + toId,
+        board_id: boardId,
+        created_by: me.id,
+        from_item: fromId,
+        to_item: toId,
+      }
+      setEdges((prev) => [...prev, temp])
+      const res = await apiFetch("/api/edges", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ boardId, fromItem: fromId, toItem: toId }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.edge) {
+        setEdges((prev) => prev.filter((e) => e.id !== temp.id))
+        setToast(data?.error || "Could not create that connection")
+        return
+      }
+      setEdges((prev) => prev.map((e) => (e.id === temp.id ? (data.edge as BoardEdge) : e)))
+    },
+    [boardId, edges, me.id],
+  )
+
+  async function removeEdge(id: string) {
+    setEdges((prev) => prev.filter((e) => e.id !== id))
+    setHoverEdge(null)
+    await apiFetch("/api/edges?id=" + id, { method: "DELETE" })
+  }
+
+  function anchors(a: BoardItem, b: BoardItem) {
+    const ac = { x: a.x + a.width / 2, y: a.y + a.height / 2 }
+    const bc = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+    const horizontal = Math.abs(bc.x - ac.x) >= Math.abs(bc.y - ac.y)
+    if (horizontal) {
+      const right = bc.x >= ac.x
+      return {
+        x1: right ? a.x + a.width : a.x,
+        y1: ac.y,
+        x2: right ? b.x : b.x + b.width,
+        y2: bc.y,
+        horizontal,
+      }
+    }
+    const down = bc.y >= ac.y
+    return {
+      x1: ac.x,
+      y1: down ? a.y + a.height : a.y,
+      x2: bc.x,
+      y2: down ? b.y : b.y + b.height,
+      horizontal,
+    }
+  }
+
+  function curve(x1: number, y1: number, x2: number, y2: number, horizontal: boolean) {
+    const d = Math.max(36, Math.abs(horizontal ? x2 - x1 : y2 - y1) * 0.45)
+    return horizontal
+      ? "M" + x1 + " " + y1 + " C" + (x1 + d) + " " + y1 + " " + (x2 - d) + " " + y2 + " " + x2 + " " + y2
+      : "M" + x1 + " " + y1 + " C" + x1 + " " + (y1 + d) + " " + x2 + " " + (y2 - d) + " " + x2 + " " + y2
+  }
+
+  const placeItem = useCallback(
+    (kind: Tool, point: { x: number; y: number }, linkUrl?: string) => {
+      const isText = kind === "text"
+      const isShape = kind === "shape"
+      const width = isText ? 260 : isShape ? 200 : 240
+      const height = isText ? 64 : isShape ? 150 : 150
+      const spot = resolve({
+        x: Math.round(point.x - width / 2),
+        y: Math.round(point.y - height / 2),
+        width,
+        height,
+      })
+      const payload: Record<string, unknown> = {
+        kind: kind === "link" ? "link" : kind,
+        shape: isShape ? shapeKind : "none",
+        x: Math.round(spot.x),
+        y: Math.round(spot.y),
+        width,
+        height,
+        title: "",
+        body: "",
+        style: isText
+          ? { fontSize: 22, fontWeight: 600, align: "left", color: "#111110" }
+          : isShape
+            ? {
+                fill: "#FFFFFF",
+                stroke: me.color,
+                fontSize: 15,
+                fontWeight: 500,
+                align: "center",
+                color: "#111110",
+              }
+            : {},
+      }
+      if (linkUrl) payload.linkUrl = linkUrl
+      addItem(payload).then((item) => {
+        if (item && kind !== "link") setEditing(item.id)
+      })
+    },
+    [addItem, me.color, resolve, shapeKind],
+  )
+
+  /** Paste an image file or a link straight onto the canvas. */
+  useEffect(() => {
+    async function onPaste(e: ClipboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return
+      }
+      const rect = wrap.current?.getBoundingClientRect()
+      if (!rect) return
+      const center = toBoard(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      const entries = Array.from(e.clipboardData?.items || [])
+      const picture = entries.find((it) => it.kind === "file" && it.type.startsWith("image/"))
+
+      if (picture) {
+        e.preventDefault()
+        const file = picture.getAsFile()
+        if (!file) return
+        setToast("Uploading image…")
+        const dataUrl = await new Promise<string>((done) => {
+          const reader = new FileReader()
+          reader.onload = () => done(String(reader.result || ""))
+          reader.onerror = () => done("")
+          reader.readAsDataURL(file)
+        })
+        if (!dataUrl) {
+          setToast("Could not read that image")
+          return
+        }
+        const res = await apiFetch("/api/upload", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ dataUrl }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || !data?.url) {
+          setToast(data?.error || "Could not upload that image")
+          return
+        }
+        const width = 300
+        const height = 220
+        const spot = resolve({
+          x: Math.round(center.x - width / 2),
+          y: Math.round(center.y - height / 2),
+          width,
+          height,
+        })
+        await addItem({
+          kind: "image",
+          shape: "none",
+          title: "",
+          body: "",
+          linkUrl: data.url,
+          x: Math.round(spot.x),
+          y: Math.round(spot.y),
+          width,
+          height,
+          style: {},
+        })
+        setToast("Image added")
+        return
+      }
+
+      const text = (e.clipboardData?.getData("text/plain") || "").trim()
+      if (text && /^https?:/i.test(text) && !text.includes(" ")) {
+        e.preventDefault()
+        placeItem("link", center, text)
+      }
+    }
+    window.addEventListener("paste", onPaste)
+    return () => window.removeEventListener("paste", onPaste)
+  }, [addItem, placeItem, resolve, toBoard])
+
+  function onWrapPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return
+    setMenu(null)
+    const point = toBoard(e.clientX, e.clientY)
+
+    if (tool === "pen") {
+      setStroke([point])
+      return
+    }
+
+    if (tool !== "select") {
+      if (tool === "link") {
+        setTool("select")
+        setLinkPoint(point)
+        return
+      }
+      const active = tool
+      setTool("select")
+      placeItem(active, point)
+      return
+    }
+
+    setSelected(null)
+    setEditing(null)
+    setWire(null)
+    drag.current = { kind: "pan", startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+    setPanning(true)
+    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+  }
+
+  function onWrapPointerMove(e: React.PointerEvent) {
+    if (stroke) {
+      const point = toBoard(e.clientX, e.clientY)
+      setStroke((prev) => (prev ? [...prev, point] : prev))
+      return
+    }
+    if (wireRef.current) {
+      const point = toBoard(e.clientX, e.clientY)
+      setWire((prev) => (prev ? { ...prev, x: point.x, y: point.y, moved: true } : prev))
+    }
+    const d = drag.current
+    if (!d) return
+    if (d.kind === "pan") {
+      setPan({ x: d.panX + (e.clientX - d.startX), y: d.panY + (e.clientY - d.startY) })
+      return
+    }
+    const dx = (e.clientX - d.startX) / zoomRef.current
+    const dy = (e.clientY - d.startY) / zoomRef.current
+    if (Math.abs(e.clientX - d.startX) > 3 || Math.abs(e.clientY - d.startY) > 3) d.moved = true
+    if (!d.moved) return
+    if (d.kind === "move") {
+      updateLocal(d.id, { x: Math.round(d.itemX + dx), y: Math.round(d.itemY + dy) })
+    } else {
+      updateLocal(d.id, {
+        width: Math.max(120, Math.round(d.w + dx)),
+        height: Math.max(56, Math.round(d.h + dy)),
+      })
+    }
+  }
+
+  async function onWrapPointerUp() {
+    if (stroke) {
+      const points = stroke
+      setStroke(null)
+      if (points.length > 3) await commitStroke(points)
+      setTool("select")
+      return
+    }
+    const d = drag.current
+    drag.current = null
+    setPanning(false)
+    if (d && (d.kind === "move" || d.kind === "resize")) {
+      const item = itemsRef.current.find((i) => i.id === d.id)
+      if (item && d.kind === "move" && !d.moved) {
+        // A single click on a card opens its inputs, Milanote style.
+        if (item.kind !== "image") setEditing(item.id)
+      } else if (item) {
+        const spot = resolve(
+          { x: item.x, y: item.y, width: item.width, height: item.height },
+          item.id,
+        )
+        const next = {
+          x: Math.round(spot.x),
+          y: Math.round(spot.y),
+          width: item.width,
+          height: item.height,
+        }
+        const prev =
+          d.kind === "move"
+            ? { x: d.itemX, y: d.itemY, width: item.width, height: item.height }
+            : { x: item.x, y: item.y, width: d.w, height: d.h }
+        updateLocal(item.id, next)
+        await patchItem(item.id, next)
+        trackPatch(item.id, next, prev)
+      }
+    }
+    if (wireRef.current?.moved) setWire(null)
+  }
+
+  async function commitStroke(points: { x: number; y: number }[]) {
+    const xs = points.map((p) => p.x)
+    const ys = points.map((p) => p.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    const w = Math.max(60, maxX - minX)
+    const h = Math.max(60, maxY - minY)
+    const path = points
+      .map((p, i) => {
+        const nx = ((p.x - minX) / w) * 100
+        const ny = ((p.y - minY) / h) * 100
+        return (i === 0 ? "M" : "L") + nx.toFixed(2) + " " + ny.toFixed(2)
+      })
+      .join(" ")
+    await addItem({
+      kind: "shape",
+      shape: "freehand",
+      x: Math.round(minX - 8),
+      y: Math.round(minY - 8),
+      width: Math.round(w + 16),
+      height: Math.round(h + 16),
+      title: "",
+      body: "",
+      style: {
+        fill: "#FFFFFF",
+        stroke: me.color,
+        fontSize: 15,
+        fontWeight: 500,
+        align: "center",
+        color: "#111110",
+        path,
+      },
+    })
+  }
+
+  function startMove(e: React.PointerEvent, item: BoardItem) {
+    if (tool !== "select" || editing === item.id) return
+    setSelected(item.id)
+    drag.current = {
+      kind: "move",
+      id: item.id,
+      startX: e.clientX,
+      startY: e.clientY,
+      itemX: item.x,
+      itemY: item.y,
+    }
+  }
+
+  function setStyle(item: BoardItem, patch: ItemStyle) {
+    const style = { ...(item.style || {}), ...patch }
+    const before = { ...(item.style || {}) }
+    updateLocal(item.id, { style })
+    patchItem(item.id, { style })
+    trackPatch(item.id, { style }, { style: before })
+  }
+
+  function duplicate(item: BoardItem) {
+    const spot = resolve({
+      x: item.x + 26,
+      y: item.y + 26,
+      width: item.width,
+      height: item.height,
+    })
+    addItem({
+      kind: item.kind,
+      shape: item.shape,
+      style: item.style || {},
+      title: item.title || "",
+      body: item.body || "",
+      linkUrl: item.link_url || "",
+      x: Math.round(spot.x),
+      y: Math.round(spot.y),
+      width: item.width,
+      height: item.height,
+    })
+  }
+
+  function startWire(item: BoardItem) {
+    setSelected(item.id)
+    setWire({
+      fromId: item.id,
+      x: item.x + item.width / 2,
+      y: item.y + item.height / 2,
+      moved: false,
+    })
+  }
+
+  function tidyBoard() {
+    const sorted = [...items].sort((a, b) => a.y - b.y || a.x - b.x)
+    const placed: Box[] = []
+    sorted.forEach((item) => {
+      const spot = freeSpot({ x: item.x, y: item.y, width: item.width, height: item.height }, placed)
+      placed.push(spot)
+      if (spot.x !== item.x || spot.y !== item.y) {
+        updateLocal(item.id, { x: Math.round(spot.x), y: Math.round(spot.y) })
+        patchItem(item.id, { x: Math.round(spot.x), y: Math.round(spot.y) })
+      }
+    })
+    setToast("Cleaned up overlapping cards")
+  }
+
+  const strokePath = stroke
+    ? stroke.map((p, i) => (i === 0 ? "M" : "L") + p.x + " " + p.y).join(" ")
+    : null
+  const wireFrom = wire ? itemById.get(wire.fromId) : null
+  const selectedRecord = selected ? itemById.get(selected) || null : null
+  const menuItem = menu ? itemById.get(menu.id) || null : null
+
+  return (
+    <div
+      ref={wrap}
+      className={
+        "canvas-wrap" +
+        (panning ? " panning" : "") +
+        (tool !== "select" ? " placing" : "") +
+        (tool === "pen" ? " drawing" : "") +
+        (wire ? " linking" : "")
+      }
+      onPointerDown={onWrapPointerDown}
+      onPointerMove={onWrapPointerMove}
+      onPointerUp={onWrapPointerUp}
+      onPointerCancel={onWrapPointerUp}
+      onContextMenu={(e) => {
+        if (!(e.target as HTMLElement).closest(".item")) return
+        e.preventDefault()
+      }}
+      onDoubleClick={(e) => {
+        if (tool !== "select" || (e.target as HTMLElement).closest(".item")) return
+        placeItem("card", toBoard(e.clientX, e.clientY))
+      }}
+    >
+      <div
+        className="canvas-layer"
+        style={{ transform: "translate(" + pan.x + "px," + pan.y + "px) scale(" + zoom + ")" }}
+      >
+        <svg className="canvas-svg" overflow="visible">
+          <defs>
+            {users.map((u) => (
+              <marker
+                key={u.id}
+                id={"arrow-" + u.id}
+                viewBox="0 0 10 10"
+                refX="8"
+                refY="5"
+                markerWidth="7"
+                markerHeight="7"
+                orient="auto-start-reverse"
+              >
+                <path d="M0 1 L9 5 L0 9 z" fill={u.color} />
+              </marker>
+            ))}
+          </defs>
+
+          {edges.map((edge) => {
+            const a = itemById.get(edge.from_item)
+            const b = itemById.get(edge.to_item)
+            if (!a || !b) return null
+            const { x1, y1, x2, y2, horizontal } = anchors(a, b)
+            const d = curve(x1, y1, x2, y2, horizontal)
+            const on = hoverEdge === edge.id
+            return (
+              <g key={edge.id}>
+                <path
+                  className={"edge-path" + (on ? " on" : "")}
+                  d={d}
+                  stroke={colorOf(edge.created_by)}
+                  markerEnd={"url(#arrow-" + edge.created_by + ")"}
+                />
+                <path
+                  className="edge-hit"
+                  d={d}
+                  onPointerEnter={() => setHoverEdge(edge.id)}
+                  onPointerLeave={() => setHoverEdge(null)}
+                  onPointerDown={(ev) => ev.stopPropagation()}
+                  onClick={(ev) => {
+                    ev.stopPropagation()
+                    removeEdge(edge.id)
+                  }}
+                />
+                {on ? (
+                  <g
+                    className="edge-x"
+                    transform={"translate(" + (x1 + x2) / 2 + "," + (y1 + y2) / 2 + ")"}
+                  >
+                    <circle r="10" fill="#111110" />
+                    <path
+                      d="M-3.5 -3.5 L3.5 3.5 M3.5 -3.5 L-3.5 3.5"
+                      stroke="#fff"
+                      strokeWidth="1.6"
+                    />
+                  </g>
+                ) : null}
+              </g>
+            )
+          })}
+
+          {wire && wireFrom ? (
+            <path
+              className="edge-live"
+              stroke={me.color}
+              d={curve(
+                wireFrom.x + wireFrom.width,
+                wireFrom.y + 16,
+                wire.x,
+                wire.y,
+                Math.abs(wire.x - (wireFrom.x + wireFrom.width / 2)) >=
+                  Math.abs(wire.y - (wireFrom.y + wireFrom.height / 2)),
+              )}
+            />
+          ) : null}
+
+          {strokePath ? (
+            <path className="edge-live" stroke={me.color} d={strokePath} fill="none" />
+          ) : null}
+        </svg>
+
+        {items.map((item) => {
+          const author = userMap.get(item.created_by)
+          const style = (item.style || {}) as ItemStyle
+          const isShape = item.kind === "shape"
+          const isText = item.kind === "text"
+          const isPlain = !isShape && !isText
+          const path = isShape ? shapePath(item.shape, style) : ""
+          const isTarget = hoverTarget === item.id && wire && wire.fromId !== item.id
+          const isSelected = selected === item.id
+          const isEditing = editing === item.id
+          const dark = isPlain && style.fill === "#111110"
+
+          return (
+            <div
+              key={item.id}
+              className={
+                "item " +
+                item.kind +
+                (isSelected ? " selected" : "") +
+                (isTarget ? " target" : "") +
+                (isEditing ? " editing" : "") +
+                (dark ? " dark" : "")
+              }
+              style={{
+                left: item.x,
+                top: item.y,
+                width: item.width,
+                height: item.height,
+                ...(isPlain && style.fill ? { background: style.fill } : {}),
+              }}
+              onPointerDown={(e) => {
+                e.stopPropagation()
+                setMenu(null)
+                if (wire && wire.fromId !== item.id) {
+                  connect(wire.fromId, item.id)
+                  setWire(null)
+                  return
+                }
+                startMove(e, item)
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                setSelected(item.id)
+                setMenu({ id: item.id, x: e.clientX, y: e.clientY })
+              }}
+              onPointerEnter={() => setHoverTarget(item.id)}
+              onPointerLeave={() => setHoverTarget((prev) => (prev === item.id ? null : prev))}
+              onPointerUp={(e) => {
+                if (wireRef.current && wireRef.current.fromId !== item.id) {
+                  e.stopPropagation()
+                  connect(wireRef.current.fromId, item.id)
+                  setWire(null)
+                }
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation()
+                setSelected(item.id)
+                setEditing(item.id)
+              }}
+            >
+              {isShape ? (
+                <svg className="shape-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
+                  {item.shape === "ellipse" ? (
+                    <ellipse
+                      cx="50"
+                      cy="50"
+                      rx="49"
+                      ry="49"
+                      fill={style.fill || "#fff"}
+                      stroke={style.stroke || author?.color || "#111"}
+                      vectorEffect="non-scaling-stroke"
+                      strokeWidth="1.6"
+                    />
+                  ) : item.shape === "rect" || item.shape === "round" ? (
+                    <rect
+                      x="0.8"
+                      y="0.8"
+                      width="98.4"
+                      height="98.4"
+                      rx={item.shape === "round" ? 6 : 0}
+                      fill={style.fill || "#fff"}
+                      stroke={style.stroke || author?.color || "#111"}
+                      vectorEffect="non-scaling-stroke"
+                      strokeWidth="1.6"
+                    />
+                  ) : (
+                    <path
+                      d={path}
+                      fill={style.fill || "#fff"}
+                      stroke={style.stroke || author?.color || "#111"}
+                      vectorEffect="non-scaling-stroke"
+                      strokeWidth="1.8"
+                      strokeLinejoin="round"
+                      strokeLinecap="round"
+                    />
+                  )}
+                </svg>
+              ) : null}
+
+              {isEditing && isPlain ? (
+                <CardEditor
+                  item={item}
+                  onCancel={() => setEditing(null)}
+                  onSave={({ title, body }) => queueSave(item.id, { title, body })}
+                />
+              ) : isEditing ? (
+                <textarea
+                  className={"item-edit" + (isText ? " text" : "")}
+                  autoFocus
+                  defaultValue={item.body || ""}
+                  placeholder={isText ? "Type anything…" : "Write here…"}
+                  style={{
+                    fontSize: style.fontSize || (isText ? 22 : 15),
+                    fontWeight: style.fontWeight || (isText ? 600 : 500),
+                    textAlign: style.align || (isText ? "left" : "center"),
+                    color: style.color || "#111110",
+                  }}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onChange={(e) => queueSave(item.id, { body: e.target.value })}
+                  onBlur={(e) => {
+                    queueSave(item.id, { body: e.target.value })
+                    setEditing(null)
+                  }}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur()
+                  }}
+                />
+              ) : isPlain ? (
+                <>
+                  <div className="item-top">
+                    <button
+                      className="item-title as-button"
+                      title="Click to rename"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelected(item.id)
+                        setEditing(item.id)
+                      }}
+                    >
+                      {item.title || <span className="item-hint">Untitled — click to name</span>}
+                    </button>
+                  </div>
+                  {item.link_thumbnail ? (
+                    <img
+                      className={"item-thumb" + (item.kind === "image" ? " full" : "")}
+                      src={item.link_thumbnail}
+                      alt=""
+                    />
+                  ) : null}
+                  {item.link_url && item.kind !== "image" ? (
+                    <a
+                      className="item-body item-linkline"
+                      href={item.link_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onPointerDown={(e) => e.stopPropagation()}
+                    >
+                      <IconLink /> {item.link_url}
+                    </a>
+                  ) : item.body ? (
+                    <div className="item-body">{item.body}</div>
+                  ) : null}
+                </>
+              ) : (
+                <div
+                  className={"item-text" + (isShape ? " in-shape" : "")}
+                  style={{
+                    fontSize: style.fontSize || (isText ? 22 : 15),
+                    fontWeight: style.fontWeight || (isText ? 600 : 500),
+                    textAlign: style.align || (isText ? "left" : "center"),
+                    color: style.color || "#111110",
+                  }}
+                >
+                  {item.body || <span className="item-hint">Double-click to write</span>}
+                </div>
+              )}
+
+              {isText ? null : (
+                <div className="item-foot">
+                  <span className="avatar sm" style={{ background: author?.color || "#8d8a84" }}>
+                    {initials(author?.display_name || "?")}
+                  </span>
+                  <span>{author?.display_name || "Unknown"}</span>
+                </div>
+              )}
+
+              {/* Hover connector: one handle in the top-right corner, plus a labelled button */}
+              <button
+                className={"item-handle" + (wire?.fromId === item.id ? " armed" : "")}
+                style={{ background: author?.color || "#111110" }}
+                title="Drag to another card to connect"
+                aria-label="Connect from this card"
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                  const point = toBoard(e.clientX, e.clientY)
+                  setSelected(item.id)
+                  setWire({ fromId: item.id, x: point.x, y: point.y, moved: false })
+                }}
+                onClick={(e) => e.stopPropagation()}
+              />
+
+              {isSelected && !isEditing ? (
+                <div
+                  className="item-bar"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onPointerUp={(e) => e.stopPropagation()}
+                  onDoubleClick={(e) => e.stopPropagation()}
+                >
+                  <button className="bar-btn" title="Edit text" onClick={() => setEditing(item.id)}>
+                    <IconText size={15} />
+                  </button>
+                  <button className="bar-btn" title="Connect to another card" onClick={() => startWire(item)}>
+                    <IconConnect size={15} />
+                  </button>
+                  <button className="bar-btn" title="Duplicate" onClick={() => duplicate(item)}>
+                    <IconDuplicate size={15} />
+                  </button>
+                  <button className="bar-btn danger" title="Delete card" onClick={() => removeItem(item.id)}>
+                    <IconTrash size={15} />
+                  </button>
+                </div>
+              ) : null}
+
+              <div
+                className="item-resize"
+                onPointerDown={(e) => {
+                  e.stopPropagation()
+                  setSelected(item.id)
+                  drag.current = {
+                    kind: "resize",
+                    id: item.id,
+                    startX: e.clientX,
+                    startY: e.clientY,
+                    w: item.width,
+                    h: item.height,
+                  }
+                }}
+              />
+            </div>
+          )
+        })}
+      </div>
+
+      {menu && menuItem ? (
+        <div
+          className="ctx-menu"
+          style={{ left: menu.x, top: menu.y }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button
+            className="ctx-item"
+            onClick={() => {
+              setEditing(menuItem.id)
+              setMenu(null)
+            }}
+          >
+            Rename / edit
+          </button>
+          <button
+            className="ctx-item"
+            onClick={() => {
+              startWire(menuItem)
+              setMenu(null)
+            }}
+          >
+            Connect with a line
+          </button>
+          <button
+            className="ctx-item"
+            onClick={() => {
+              duplicate(menuItem)
+              setMenu(null)
+            }}
+          >
+            Duplicate
+          </button>
+          <div className="ctx-label">Card colour</div>
+          <div className="ctx-colors">
+            {FILLS.map((c) => (
+              <button
+                key={c}
+                className="insp-swatch"
+                style={{ background: c }}
+                aria-label={"Card colour " + c}
+                onClick={() => {
+                  setStyle(menuItem, { fill: c })
+                  setMenu(null)
+                }}
+              />
+            ))}
+          </div>
+          <div className="ctx-sep" />
+          <button
+            className="ctx-item danger"
+            onClick={() => {
+              removeItem(menuItem.id)
+            }}
+          >
+            Delete
+          </button>
+        </div>
+      ) : null}
+
+      {linkPoint ? (
+        <LinkModal
+          onCancel={() => setLinkPoint(null)}
+          onSubmit={(url) => {
+            const point = linkPoint
+            setLinkPoint(null)
+            placeItem("link", point, url)
+          }}
+        />
+      ) : null}
+
+      <div className="canvas-hud">
+        <div className="hud-card">
+          {items.length} {items.length === 1 ? "card" : "cards"}
+        </div>
+        {wire ? (
+          <div className="linking-note">
+            Drop on a card to connect — or click the target card. Esc cancels
+          </div>
+        ) : null}
+        {tool === "pen" ? (
+          <div className="linking-note">Draw any shape — it becomes a card you can write in</div>
+        ) : null}
+        {tool !== "select" && tool !== "pen" ? (
+          <div className="linking-note">Click anywhere on the canvas to place it</div>
+        ) : null}
+        {!selected && tool === "select" && !wire ? (
+          <div className="hud-card ghost">Scroll to zoom · click a card to write</div>
+        ) : null}
+        {toast ? <div className="linking-note warn">{toast}</div> : null}
+      </div>
+
+      {selectedRecord && (selectedRecord.kind === "shape" || selectedRecord.kind === "text") ? (
+        <div
+          className="inspector"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+        >
+          {(() => {
+            const item = selectedRecord
+            const style = (item.style || {}) as ItemStyle
+            const isText = item.kind === "text"
+            const size = style.fontSize || (isText ? 22 : 15)
+            return (
+              <>
+                <div className="insp-row">
+                  <span className="insp-label">Size</span>
+                  <div className="insp-group">
+                    <button
+                      className="dock-btn sm"
+                      aria-label="Smaller text"
+                      onClick={() => setStyle(item, { fontSize: Math.max(10, size - 2) })}
+                    >
+                      <IconMinus />
+                    </button>
+                    <span className="insp-value">{size}</span>
+                    <button
+                      className="dock-btn sm"
+                      aria-label="Bigger text"
+                      onClick={() => setStyle(item, { fontSize: Math.min(96, size + 2) })}
+                    >
+                      <IconPlus />
+                    </button>
+                    <button
+                      className={"dock-btn sm" + ((style.fontWeight || 500) >= 700 ? " on" : "")}
+                      aria-label="Bold"
+                      onClick={() =>
+                        setStyle(item, {
+                          fontWeight: (style.fontWeight || 500) >= 700 ? 500 : 800,
+                        })
+                      }
+                    >
+                      <b style={{ fontSize: 13 }}>B</b>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="insp-row">
+                  <span className="insp-label">Align</span>
+                  <div className="insp-group">
+                    {(["left", "center", "right"] as const).map((a) => (
+                      <button
+                        key={a}
+                        className={
+                          "dock-btn sm" +
+                          ((style.align || (isText ? "left" : "center")) === a ? " on" : "")
+                        }
+                        aria-label={"Align " + a}
+                        onClick={() => setStyle(item, { align: a })}
+                      >
+                        {a === "left" ? (
+                          <IconAlignLeft />
+                        ) : a === "center" ? (
+                          <IconAlignCenter />
+                        ) : (
+                          <IconAlignRight />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="insp-row">
+                  <span className="insp-label">Text</span>
+                  <div className="insp-group">
+                    {TEXT_COLORS.map((c) => (
+                      <button
+                        key={c}
+                        className={"insp-swatch" + ((style.color || "#111110") === c ? " on" : "")}
+                        style={{ background: c }}
+                        aria-label={"Text color " + c}
+                        onClick={() => setStyle(item, { color: c })}
+                      />
+                    ))}
+                  </div>
+                </div>
+
+                {item.kind === "shape" ? (
+                  <>
+                    <div className="insp-row">
+                      <span className="insp-label">Fill</span>
+                      <div className="insp-group">
+                        {FILLS.map((c) => (
+                          <button
+                            key={c}
+                            className={"insp-swatch" + ((style.fill || "#FFFFFF") === c ? " on" : "")}
+                            style={{ background: c }}
+                            aria-label={"Fill " + c}
+                            onClick={() => setStyle(item, { fill: c })}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    {item.shape !== "freehand" ? (
+                      <div className="insp-row">
+                        <span className="insp-label">Shape</span>
+                        <div className="insp-group">
+                          {SHAPES.map(({ id, label, Icon }) => (
+                            <button
+                              key={id}
+                              className={"dock-btn sm" + (item.shape === id ? " on" : "")}
+                              aria-label={label}
+                              onClick={() => {
+                                updateLocal(item.id, { shape: id })
+                                patchItem(item.id, { shape: id })
+                              }}
+                            >
+                              <Icon size={14} />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
+            )
+          })()}
+        </div>
+      ) : null}
+
+      <div className="canvas-dock labelled" onPointerDown={(e) => e.stopPropagation()}>
+        <button
+          className={"dock-btn" + (tool === "select" ? " on" : "")}
+          onClick={() => {
+            setTool("select")
+            setWire(null)
+          }}
+        >
+          <IconCursor />
+          <span>Select</span>
+        </button>
+        <button
+          className={"dock-btn" + (tool === "card" ? " on" : "")}
+          onClick={() => setTool(tool === "card" ? "select" : "card")}
+        >
+          <IconCard />
+          <span>Card</span>
+        </button>
+        <button
+          className={"dock-btn" + (tool === "sticky" ? " on" : "")}
+          onClick={() => setTool(tool === "sticky" ? "select" : "sticky")}
+        >
+          <IconSticky />
+          <span>Note</span>
+        </button>
+        <button
+          className={"dock-btn" + (tool === "text" ? " on" : "")}
+          onClick={() => setTool(tool === "text" ? "select" : "text")}
+        >
+          <IconText />
+          <span>Text</span>
+        </button>
+
+        <div className="dock-shape">
+          <button
+            className={"dock-btn" + (tool === "shape" ? " on" : "")}
+            onClick={() => {
+              setShapeMenu((v) => !v)
+              setTool("shape")
+            }}
+          >
+            <IconShapes />
+            <span>Shape</span>
+          </button>
+          {shapeMenu ? (
+            <div className="shape-menu">
+              {SHAPES.map(({ id, label, Icon }) => (
+                <button
+                  key={id}
+                  className={"dock-btn sm" + (shapeKind === id ? " on" : "")}
+                  title={label}
+                  onClick={() => {
+                    setShapeKind(id)
+                    setTool("shape")
+                    setShapeMenu(false)
+                  }}
+                >
+                  <Icon size={15} />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+
+        <button
+          className={"dock-btn" + (tool === "pen" ? " on" : "")}
+          onClick={() => setTool(tool === "pen" ? "select" : "pen")}
+        >
+          <IconPen />
+          <span>Draw</span>
+        </button>
+        <button
+          className={"dock-btn" + (tool === "link" ? " on" : "")}
+          onClick={() => setTool(tool === "link" ? "select" : "link")}
+        >
+          <IconLink />
+          <span>Link</span>
+        </button>
+
+        <span className="dock-sep" />
+
+        <button
+          className={"dock-btn" + (wire ? " accent on" : "")}
+          onClick={() => {
+            if (wire) {
+              setWire(null)
+              return
+            }
+            const item = selected ? itemById.get(selected) : null
+            if (item) {
+              startWire(item)
+              return
+            }
+            setToast("Select a card first, or use its Connect button")
+          }}
+        >
+          <IconConnect />
+          <span>Connect</span>
+        </button>
+
+        <button className="dock-btn" title="Space out overlapping cards" onClick={tidyBoard}>
+          <IconTarget />
+          <span>Tidy</span>
+        </button>
+
+        <span className="dock-sep" />
+
+        <button
+          className="dock-btn"
+          title="Undo (Ctrl + Z)"
+          disabled={history.undo === 0}
+          onClick={() => undo()}
+        >
+          <IconUndo />
+          <span>Undo</span>
+        </button>
+        <button
+          className="dock-btn"
+          title="Redo (Ctrl + Shift + Z)"
+          disabled={history.redo === 0}
+          onClick={() => redo()}
+        >
+          <IconRedo />
+          <span>Redo</span>
+        </button>
+        <button className="dock-btn" title="See everything in one view" onClick={zoomToFit}>
+          <IconFit />
+          <span>Fit view</span>
+        </button>
+
+        <span className="dock-sep" />
+
+        <div className="zoom-group">
+          <button
+            className="dock-btn sm"
+            title="Zoom out (Ctrl + −)"
+            aria-label="Zoom out"
+            onClick={() => zoomTo(zoom / 1.15)}
+          >
+            <IconMinus />
+          </button>
+          <button className="zoom-value" title="Click to reset to 100%" onClick={() => zoomTo(1)}>
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            className="dock-btn sm"
+            title="Zoom in (Ctrl + +)"
+            aria-label="Zoom in"
+            onClick={() => zoomTo(zoom * 1.15)}
+          >
+            <IconPlus />
+          </button>
+          <button className="dock-btn sm" title="Fit everything on screen" onClick={zoomToFit}>
+            <IconTarget />
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
