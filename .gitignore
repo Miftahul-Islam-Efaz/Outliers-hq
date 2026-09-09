@@ -17,3 +17,5 @@ out/
 # os / editor
 .DS_Store
 .vscode/
+
+tsconfig.tsbuildinfo
