@@ -391,6 +391,9 @@ export default function Canvas({
   const [toast, setToast] = useState<string | null>(null)
   const [linkPoint, setLinkPoint] = useState<{ x: number; y: number } | null>(null)
   const [dragTool, setDragTool] = useState<Tool | null>(null)
+  const [ghost, setGhost] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
+  const ghostRef = useRef<{ kind: Tool; x: number; y: number } | null>(null)
+  const marqueeGhostRef = useRef<{ x: number; y: number; w: number; h: number } | null>(null)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [history, setHistory] = useState({ undo: 0, redo: 0 })
 
@@ -410,6 +413,7 @@ export default function Canvas({
   itemsRef.current = items
   pickedRef.current = picked
   marqueeRef.current = marquee
+  marqueeGhostRef.current = ghost ? { x: ghost.x, y: ghost.y, w: ghost.w, h: ghost.h } : null
   const past = useRef<Step[]>([])
   const future = useRef<Step[]>([])
 
@@ -419,7 +423,11 @@ export default function Canvas({
   const ownedByMe = (item: { created_by: string }) => item.created_by === me.id
   const startEdit = (item: { id: string; created_by: string }) => {
     if (!ownedByMe(item)) {
-      setToast(nameOf(item.created_by) + " wrote this card, so the text is locked. You can still move, resize and connect it.")
+      setToast(
+        "You can't edit a teammate's card. " +
+          nameOf(item.created_by) +
+          " created this one, so only they can change the text. You can still move, resize and connect it.",
+      )
       return
     }
     startEdit(item)
@@ -630,8 +638,9 @@ export default function Canvas({
       const snapshot = itemsRef.current.find((i) => i.id === id)
       if (snapshot && snapshot.created_by !== me.id) {
         setToast(
-          (userMap.get(snapshot.created_by)?.display_name || "Another member") +
-            " created this card, so only they can delete it.",
+          "You can't delete a teammate's card. " +
+            (userMap.get(snapshot.created_by)?.display_name || "Another member") +
+            " created this one.",
         )
         return
       }
@@ -840,11 +849,16 @@ export default function Canvas({
   }
 
   const placeItem = useCallback(
-    (kind: Tool, point: { x: number; y: number }, linkUrl?: string) => {
+    (
+      kind: Tool,
+      point: { x: number; y: number },
+      linkUrl?: string,
+      size?: { width: number; height: number },
+    ) => {
       const isText = kind === "text"
       const isShape = kind === "shape"
-      const width = isText ? 260 : isShape ? 200 : 240
-      const height = isText ? 64 : isShape ? 150 : 150
+      const width = size ? Math.max(120, Math.round(size.width)) : isText ? 260 : isShape ? 200 : 240
+      const height = size ? Math.max(56, Math.round(size.height)) : isText ? 64 : isShape ? 150 : 150
       const spot = resolve({
         x: Math.round(point.x - width / 2),
         y: Math.round(point.y - height / 2),
@@ -987,9 +1001,10 @@ export default function Canvas({
         setLinkPoint(point)
         return
       }
-      const active = tool
-      setTool("select")
-      placeItem(active, point)
+      // Drag out the size you want; a plain click uses the default size.
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+      ghostRef.current = { kind: tool, x: e.clientX, y: e.clientY }
+      setGhost({ x: e.clientX, y: e.clientY, w: 0, h: 0 })
       return
     }
 
@@ -1011,6 +1026,16 @@ export default function Canvas({
     if (stroke) {
       const point = toBoard(e.clientX, e.clientY)
       setStroke((prev) => (prev ? [...prev, point] : prev))
+      return
+    }
+    if (ghostRef.current) {
+      const g = ghostRef.current
+      setGhost({
+        x: Math.min(g.x, e.clientX),
+        y: Math.min(g.y, e.clientY),
+        w: Math.abs(e.clientX - g.x),
+        h: Math.abs(e.clientY - g.y),
+      })
       return
     }
     if (wireRef.current) {
@@ -1055,6 +1080,24 @@ export default function Canvas({
       const points = stroke
       setStroke(null)
       if (points.length > 3) await commitStroke(points)
+      return
+    }
+    const g = ghostRef.current
+    if (g) {
+      const box = marqueeGhostRef.current
+      ghostRef.current = null
+      setGhost(null)
+      setTool("select")
+      const big = box && box.w > 24 && box.h > 24
+      const centre = big
+        ? toBoard(box.x + box.w / 2, box.y + box.h / 2)
+        : toBoard(g.x, g.y)
+      placeItem(
+        g.kind,
+        centre,
+        undefined,
+        big ? { width: box.w / zoomRef.current, height: box.h / zoomRef.current } : undefined,
+      )
       return
     }
     const d = drag.current
@@ -1255,11 +1298,8 @@ export default function Canvas({
       onPointerUp={onWrapPointerUp}
       onPointerCancel={onWrapPointerUp}
       onDragOver={(e) => {
-        if (dragTool) e.dataTransfer.dropEffect = "copy"
-        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
-          e.preventDefault()
-          e.dataTransfer.dropEffect = "copy"
-        }
+        e.preventDefault()
+        e.dataTransfer.dropEffect = "copy"
       }}
       onDrop={(e) => {
         const dropped = e.dataTransfer?.getData("text/ohq-tool") || ""
@@ -1742,6 +1782,13 @@ export default function Canvas({
         </div>
       ) : null}
 
+      {ghost && ghost.w > 6 && ghost.h > 6 ? (
+        <div
+          className="place-ghost"
+          style={{ left: ghost.x, top: ghost.y, width: ghost.w, height: ghost.h }}
+        />
+      ) : null}
+
       {linkPoint ? (
         <div
           className="link-draft"
@@ -1862,7 +1909,7 @@ export default function Canvas({
           </div>
         ) : null}
         {tool !== "select" && tool !== "pen" ? (
-          <div className="linking-note">Click anywhere on the canvas to place it</div>
+          <div className="place-tip">Click, or drag out the size you want</div>
         ) : null}
         {picked.length > 1 ? (
           <button
@@ -1878,7 +1925,12 @@ export default function Canvas({
         {!selected && picked.length === 0 && tool === "select" && !wire ? (
           <div className="hud-card ghost">Drag to select · Ctrl + scroll to zoom</div>
         ) : null}
-        {toast ? <div className="linking-note warn">{toast}</div> : null}
+        {toast ? (
+          <div className="board-toast" role="status">
+            <span className="board-toast-dot" />
+            <span>{toast}</span>
+          </div>
+        ) : null}
       </div>
 
       {selectedRecord && (selectedRecord.kind === "shape" || selectedRecord.kind === "text") ? (

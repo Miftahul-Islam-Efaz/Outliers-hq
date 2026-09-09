@@ -1416,3 +1416,87 @@ textarea {
 /* Link draft field */
 .link-draft { z-index: 45; width: 280px; }
 .link-draft-input { width: 100%; }
+
+/* ==== Milanote refinement pass 5: selection, placing ghost, toast ==== */
+
+/* Nothing on the board is text-selectable except real editors */
+.canvas-wrap,
+.canvas-wrap *,
+.canvas-dock,
+.canvas-dock * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+.canvas-wrap input,
+.canvas-wrap textarea,
+.canvas-wrap [contenteditable="true"],
+.canvas-wrap .note-input,
+.canvas-wrap .item.editing .item-text,
+.canvas-wrap .item.editing .item-title,
+.canvas-wrap .item.editing .item-body {
+  -webkit-user-select: text !important;
+  user-select: text !important;
+  cursor: text;
+}
+.canvas-wrap img { -webkit-user-drag: none; }
+
+/* Drag out the size you want before the card exists */
+.place-ghost {
+  position: fixed;
+  z-index: 35;
+  border: 1.5px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(255, 106, 0, 0.07);
+  pointer-events: none;
+}
+
+/* Quiet placement tip, centred above the dock */
+.place-tip {
+  position: fixed;
+  left: 50%;
+  bottom: 112px;
+  transform: translateX(-50%);
+  z-index: 30;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(17, 17, 16, 0.82);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: fadeUp 0.18s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+/* Permission / status feedback: calm white pill, top centre */
+.board-toast {
+  position: fixed;
+  left: 50%;
+  top: 76px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: min(520px, 88vw);
+  padding: 10px 15px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
+  box-shadow: var(--shadow-float, 0 12px 30px rgba(17, 17, 16, 0.14));
+  animation: fadeDown 0.2s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.board-toast-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+@keyframes fadeDown {
+  from { opacity: 0; transform: translate(-50%, -8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
