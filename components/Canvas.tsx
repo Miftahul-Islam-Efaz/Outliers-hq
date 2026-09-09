@@ -430,7 +430,7 @@ export default function Canvas({
       )
       return
     }
-    startEdit(item)
+    setEditing(item.id)
   }
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
 

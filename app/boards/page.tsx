@@ -12,7 +12,10 @@ export default async function BoardsPage() {
   if (!me) redirect("/login")
 
   const [boardsRes, usersRes, itemsRes] = await Promise.all([
-    db.from("whiteboards").select("*").order("created_at", { ascending: false }),
+    db
+      .from("whiteboards")
+      .select("id, title, description, created_by, created_at, updated_at")
+      .order("created_at", { ascending: false }),
     db.from("users").select("id, username, display_name, color"),
     db.from("whiteboard_items").select("board_id"),
   ])
