@@ -57,6 +57,7 @@ export type ItemStyle = {
   fontWeight?: number
   align?: "left" | "center" | "right"
   color?: string
+  italic?: boolean
   path?: string
 }
 

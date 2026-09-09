@@ -4,7 +4,6 @@ import { apiFetch } from "@/lib/base"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { BoardEdge, BoardItem, ItemStyle, User } from "@/lib/db"
 import { initials } from "@/lib/links"
-import LinkModal from "./LinkModal"
 import {
   IconCard,
   IconConnect,
@@ -30,6 +29,7 @@ import {
   IconShapes,
   IconSquare,
   IconText,
+  IconTextStyle,
   IconTriangle,
   IconUndo,
 } from "./ToolIcons"
@@ -116,10 +116,126 @@ function freeSpot(box: Box, others: Box[]): Box {
   return candidate
 }
 
+const TEXT_STYLES: Array<{ id: string; label: string; fontSize: number; fontWeight: number }> = [
+  { id: "h1", label: "Large heading", fontSize: 26, fontWeight: 700 },
+  { id: "h2", label: "Normal heading", fontSize: 19, fontWeight: 650 },
+  { id: "body", label: "Normal text", fontSize: 14, fontWeight: 450 },
+  { id: "small", label: "Small text", fontSize: 12, fontWeight: 450 },
+]
+
+const HIGHLIGHTS = [
+  { id: "none", value: "" },
+  { id: "yellow", value: "#FFF3C4" },
+  { id: "green", value: "#D9F2E3" },
+  { id: "blue", value: "#D9E8FA" },
+  { id: "pink", value: "#FBD9E8" },
+  { id: "purple", value: "#E8DCFB" },
+]
+
 function grow(el: HTMLTextAreaElement | null) {
   if (!el) return
   el.style.height = "auto"
   el.style.height = el.scrollHeight + "px"
+}
+
+/** The formatting rail that floats beside an open note. */
+function NoteRail({
+  item,
+  onStyle,
+}: {
+  item: BoardItem
+  onStyle: (patch: ItemStyle) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const style = (item.style || {}) as ItemStyle
+  const size = style.fontSize || 14
+  const active =
+    TEXT_STYLES.find((s) => s.fontSize === size)?.id || "body"
+
+  return (
+    <div
+      className="note-rail"
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        className={"rail-btn" + (open ? " on" : "")}
+        title="Text style"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <IconTextStyle />
+      </button>
+      <button
+        className={"rail-btn" + ((style.fontWeight || 450) >= 650 ? " on" : "")}
+        title="Bold"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() =>
+          onStyle({ fontWeight: (style.fontWeight || 450) >= 650 ? 450 : 700 })
+        }
+      >
+        <b>B</b>
+      </button>
+      <button
+        className={"rail-btn" + (style.italic ? " on" : "")}
+        title="Italic"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onStyle({ italic: !style.italic })}
+      >
+        <i>I</i>
+      </button>
+
+      {open ? (
+        <div className="style-menu">
+          {TEXT_STYLES.map((s) => (
+            <button
+              key={s.id}
+              className={"style-row" + (active === s.id ? " on" : "")}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                onStyle({ fontSize: s.fontSize, fontWeight: s.fontWeight })
+                setOpen(false)
+              }}
+            >
+              <span style={{ fontSize: Math.min(s.fontSize, 18), fontWeight: s.fontWeight }}>
+                {s.label}
+              </span>
+              {active === s.id ? <span className="style-tick">✓</span> : null}
+            </button>
+          ))}
+          <div className="style-sep" />
+          <div className="style-label">Color</div>
+          <div className="style-colors">
+            {TEXT_COLORS.map((c) => (
+              <button
+                key={c}
+                className={"style-swatch" + ((style.color || "#111110") === c ? " on" : "")}
+                style={{ color: c }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onStyle({ color: c })}
+              >
+                A
+              </button>
+            ))}
+          </div>
+          <div className="style-label">Highlight</div>
+          <div className="style-colors">
+            {HIGHLIGHTS.map((h) => (
+              <button
+                key={h.id}
+                className={"style-swatch" + ((style.fill || "") === h.value ? " on" : "")}
+                style={{ background: h.value || "#fff" }}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onStyle({ fill: h.value })}
+              >
+                A
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 /** A note is just a text box: click it and type, exactly like Milanote. */
@@ -148,6 +264,12 @@ function NoteEditor({
       ref={box}
       className="note-input"
       value={body}
+      style={{
+        fontSize: (item.style as ItemStyle)?.fontSize || 14,
+        fontWeight: (item.style as ItemStyle)?.fontWeight || 450,
+        fontStyle: (item.style as ItemStyle)?.italic ? "italic" : "normal",
+        color: (item.style as ItemStyle)?.color || "#111110",
+      }}
       placeholder="Start typing…"
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
@@ -1250,7 +1372,9 @@ export default function Canvas({
                 top: item.y,
                 width: item.width,
                 height: item.height,
-                ...(isPlain && style.fill ? { background: style.fill } : {}),
+                ...((isPlain || item.kind === "sticky") && style.fill
+                  ? { background: style.fill }
+                  : {}),
               }}
               onPointerDown={(e) => {
                 e.stopPropagation()
@@ -1323,6 +1447,12 @@ export default function Canvas({
               ) : null}
 
               {isEditing && item.kind === "sticky" ? (
+                <NoteRail
+                  item={item}
+                  onStyle={(patch) => setStyle(item, patch)}
+                />
+              ) : null}
+              {isEditing && item.kind === "sticky" ? (
                 <NoteEditor
                   item={item}
                   onClose={() => setEditing(null)}
@@ -1358,7 +1488,15 @@ export default function Canvas({
                   }}
                 />
               ) : item.kind === "sticky" ? (
-                <div className="note-text">
+                <div
+                  className="note-text"
+                  style={{
+                    fontSize: style.fontSize || 14,
+                    fontWeight: style.fontWeight || 450,
+                    fontStyle: style.italic ? "italic" : "normal",
+                    color: style.color || "#111110",
+                  }}
+                >
                   {item.body || <span className="item-hint">Start typing…</span>}
                 </div>
               ) : isPlain ? (
@@ -1540,14 +1678,38 @@ export default function Canvas({
       ) : null}
 
       {linkPoint ? (
-        <LinkModal
-          onCancel={() => setLinkPoint(null)}
-          onSubmit={(url) => {
-            const point = linkPoint
-            setLinkPoint(null)
-            placeItem("link", point, url)
+        <div
+          className="link-draft"
+          style={{
+            left: pan.x + linkPoint.x * zoom - 130 * zoom,
+            top: pan.y + linkPoint.y * zoom - 24 * zoom,
+            transform: `scale(${zoom})`,
           }}
-        />
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <IconLink />
+          <input
+            className="link-draft-input"
+            autoFocus
+            placeholder="Enter a link URL"
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === "Escape") setLinkPoint(null)
+              if (e.key === "Enter") {
+                const url = (e.target as HTMLInputElement).value.trim()
+                const point = linkPoint
+                setLinkPoint(null)
+                if (url) placeItem("link", point, url)
+              }
+            }}
+            onBlur={(e) => {
+              const url = e.target.value.trim()
+              const point = linkPoint
+              setLinkPoint(null)
+              if (url) placeItem("link", point, url)
+            }}
+          />
+        </div>
       ) : null}
 
       <div className="canvas-hud">

@@ -113,6 +113,13 @@ export const IconFit = ({ size = 17 }: P) => (
   </svg>
 )
 
+export const IconTextStyle = ({ size = 16 }: P) => (
+  <svg {...s(size)}>
+    <path d="M4 8V6.5h9V8M8.5 6.5v11M6.5 17.5h4" />
+    <path d="M15 12v-1h5v1M17.5 11v6.5M16 17.5h3" />
+  </svg>
+)
+
 export const IconEraser = ({ size = 17 }: P) => (
   <svg {...s(size)}>
     <path d="M8.5 19.5H19M4.8 16.2l6-6a2 2 0 0 1 2.8 0l3.6 3.6a2 2 0 0 1 0 2.8l-3 3H8.4l-3.6-3.6z" />

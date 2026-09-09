@@ -968,3 +968,250 @@
   .canvas-dock.flat .dock-btn { width: 46px; min-width: 46px; height: 44px; }
   .canvas-dock.flat .dock-btn span { display: none; }
 }
+
+/* ==== Milanote refinement pass 2 ==== */
+
+/* THE hover-bar bug: .item clipped anything sitting outside the card */
+.item { overflow: visible; transition: box-shadow 0.16s ease, border-color 0.16s ease; }
+.item-thumb, .item-thumb.full { border-radius: 10px; }
+
+/* hover toolbar: same behaviour for hover and selection, with a soft rise */
+.item-bar {
+  top: -44px !important;
+  left: 50% !important;
+  transform: translateX(-50%) translateY(4px) scale(0.96);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+  border-color: rgba(17, 17, 16, 0.08);
+  box-shadow: 0 8px 22px rgba(17, 17, 16, 0.14);
+}
+.item:hover .item-bar,
+.item.selected .item-bar {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0) scale(1);
+}
+/* invisible bridge so the pointer can travel from card to toolbar */
+.item-bar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -14px;
+  height: 14px;
+}
+.bar-btn { transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease; }
+.bar-btn:hover { background: rgba(17, 17, 16, 0.06); color: var(--ink); }
+.bar-btn:active { transform: scale(0.9); }
+.bar-btn.danger:hover { background: #fdecec; color: #d33f34; }
+
+/* dock: one row, never wrapping out of its box */
+.canvas-dock.flat {
+  flex-wrap: nowrap;
+  max-width: calc(100vw - 40px);
+  padding: 5px 7px;
+}
+.canvas-dock.flat .dock-btn {
+  width: 50px;
+  min-width: 50px;
+  height: 46px;
+  transition: background 0.13s ease, color 0.13s ease, transform 0.13s ease;
+}
+.canvas-dock.flat .dock-btn:active { transform: scale(0.93); }
+.canvas-dock.flat .dock-btn span { font-size: 10px; line-height: 1; }
+.canvas-dock.flat .zoom-group { display: flex; align-items: center; gap: 2px; }
+.canvas-dock.flat .zoom-value {
+  min-width: 46px;
+  text-align: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+/* shape picker sits centred right above its own button */
+.canvas-dock.flat .dock-shape { position: relative; }
+.canvas-dock.flat .shape-menu {
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 999px;
+  animation: pop 0.14s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* note formatting rail, straight from the video */
+.note-rail {
+  position: absolute;
+  top: 0;
+  left: -42px;
+  z-index: 45;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 8px 22px rgba(17, 17, 16, 0.14);
+  animation: fadeUp 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.rail-btn {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, transform 0.12s ease;
+}
+.rail-btn:hover { background: rgba(17, 17, 16, 0.06); color: var(--ink); }
+.rail-btn:active { transform: scale(0.9); }
+.rail-btn.on { background: rgba(255, 106, 0, 0.12); color: var(--accent); }
+
+.style-menu {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 0;
+  width: 210px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(17, 17, 16, 0.18);
+  animation: fadeUp 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.style-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  background: transparent;
+  border-radius: 8px;
+  text-align: left;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.style-row:hover { background: rgba(17, 17, 16, 0.05); }
+.style-row.on { background: rgba(255, 106, 0, 0.09); }
+.style-tick { color: var(--accent); font-size: 12px; }
+.style-sep { height: 1px; background: rgba(17, 17, 16, 0.08); margin: 6px 4px; }
+.style-label {
+  padding: 2px 9px 4px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.style-colors { display: flex; gap: 4px; padding: 0 6px 6px; }
+.style-swatch {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(17, 17, 16, 0.1);
+  border-radius: 7px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.style-swatch:hover { transform: translateY(-1px); }
+.style-swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+
+/* inline link field, exactly like Milanote's "Enter a link URL" */
+.link-draft {
+  position: absolute;
+  z-index: 60;
+  transform-origin: top left;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 260px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(17, 17, 16, 0.18);
+  color: var(--muted);
+  animation: fadeUp 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.link-draft-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+}
+
+/* ---- Notes page: inputs and press feedback ---- */
+.input, .textarea {
+  width: 100%;
+  padding: 11px 13px;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.1);
+  border-radius: 11px;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  transition: border-color 0.14s ease, box-shadow 0.14s ease, background 0.14s ease;
+}
+.input::placeholder, .textarea::placeholder { color: #a8a49c; }
+.input:hover, .textarea:hover { border-color: rgba(17, 17, 16, 0.2); }
+.input:focus, .textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(255, 106, 0, 0.14);
+}
+.input-lg { padding: 13px 15px; font-size: 16px; font-weight: 600; letter-spacing: -0.01em; }
+.textarea { min-height: 96px; resize: vertical; line-height: 1.55; margin-top: 10px; }
+.field-label {
+  display: block;
+  margin-bottom: 7px;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.composer { animation: fadeUp 0.2s cubic-bezier(0.2, 0.8, 0.3, 1); }
+.composer-grid { gap: 10px; }
+
+.btn, .chip, .react, .dock-btn, .bar-btn, .hud-card.danger {
+  transition: background 0.14s ease, border-color 0.14s ease, color 0.14s ease,
+    transform 0.12s ease, box-shadow 0.14s ease;
+}
+.btn { border-radius: 11px; padding: 10px 18px; font-weight: 600; }
+.btn:active, .chip:active, .react:active { transform: scale(0.95); }
+.btn-accent:hover { filter: brightness(1.05); box-shadow: 0 6px 18px rgba(255, 106, 0, 0.28); }
+.btn-ghost:hover { background: rgba(17, 17, 16, 0.05); }
+.btn:disabled { opacity: 0.5; transform: none; }
+.chip { border-radius: 999px; }
+.chip:hover { border-color: rgba(17, 17, 16, 0.25); }
+.note { animation: fadeUp 0.22s cubic-bezier(0.2, 0.8, 0.3, 1); transition: transform 0.16s ease, box-shadow 0.16s ease; }
+.note:hover { transform: translateY(-2px); box-shadow: var(--shadow-float); }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+}
