@@ -3,7 +3,17 @@ import { db } from "@/lib/db"
 import { currentUser } from "@/lib/auth"
 import { buildPreview } from "@/lib/links"
 
+const BUCKET = "board-media"
 const KINDS = ["card", "sticky", "text", "link", "shape", "image"]
+
+/** Turn a public storage URL back into the object path so we can remove it. */
+function storagePath(url: string | null) {
+  if (!url) return null
+  const marker = "/storage/v1/object/public/" + BUCKET + "/"
+  const at = url.indexOf(marker)
+  if (at === -1) return null
+  return decodeURIComponent(url.slice(at + marker.length).split("?")[0]) || null
+}
 const SHAPES = ["rect", "round", "ellipse", "diamond", "triangle", "freehand", "none"]
 
 function cleanStyle(input: unknown) {
@@ -70,6 +80,26 @@ export async function PATCH(req: Request) {
   const id = String(body?.id || "")
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
 
+  const { data: existing } = await db
+    .from("whiteboard_items")
+    .select("created_by")
+    .eq("id", id)
+    .maybeSingle()
+  if (!existing) return NextResponse.json({ error: "That card no longer exists" }, { status: 404 })
+
+  const mine = existing.created_by === user.id
+  const touchesContent =
+    typeof body.title === "string" ||
+    typeof body.body === "string" ||
+    body.style !== undefined ||
+    SHAPES.includes(body.shape)
+  if (!mine && touchesContent) {
+    return NextResponse.json(
+      { error: "Only the person who created this card can change its text or styling" },
+      { status: 403 },
+    )
+  }
+
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
   for (const key of ["x", "y", "width", "height"]) {
     if (body[key] !== undefined) patch[key] = Math.round(Number(body[key]))
@@ -91,7 +121,34 @@ export async function DELETE(req: Request) {
   const id = new URL(req.url).searchParams.get("id") || ""
   if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 })
 
+  const { data: row } = await db
+    .from("whiteboard_items")
+    .select("created_by, kind, link_url, link_thumbnail")
+    .eq("id", id)
+    .maybeSingle()
+  if (!row) return NextResponse.json({ ok: true })
+  if (row.created_by !== user.id) {
+    return NextResponse.json(
+      { error: "Only the person who created this card can delete it" },
+      { status: 403 },
+    )
+  }
+
   const { error } = await db.from("whiteboard_items").delete().eq("id", id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+  // Uploaded images live in our own bucket, so remove the file too. Skip it if
+  // any other card still points at the same object.
+  if (row.kind === "image") {
+    const path = storagePath(row.link_thumbnail || row.link_url)
+    if (path) {
+      const { count } = await db
+        .from("whiteboard_items")
+        .select("id", { count: "exact", head: true })
+        .eq("link_thumbnail", row.link_thumbnail || row.link_url)
+      if (!count) await db.storage.from(BUCKET).remove([path])
+    }
+  }
+
   return NextResponse.json({ ok: true })
 }

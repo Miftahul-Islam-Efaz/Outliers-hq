@@ -1349,3 +1349,70 @@
 .draw-save { background: var(--accent); color: #fff; }
 .draw-save:hover { filter: brightness(1.06); }
 .draw-text:active, .draw-save:active { transform: scale(0.95); }
+
+/* ==== Milanote refinement pass 4: selection, author tag, drag-drop, draw bar ==== */
+
+/* Stop stray blue text highlighting while dragging, drawing or clicking chrome */
+.canvas-wrap,
+.canvas-dock,
+.canvas-hud,
+.item-bar,
+.note-rail,
+.style-menu,
+.ctx-menu,
+.draw-bar,
+.inspector,
+.item-foot,
+.item-hint {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.item.editing .item-body,
+.note-input,
+.item-text[contenteditable="true"],
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* Author tag never sits on top of the card text: it fades out on hover */
+.item .item-foot {
+  opacity: 0;
+  transition: opacity 0.14s ease;
+  pointer-events: none;
+}
+.item.selected .item-foot { opacity: 0.75; }
+.item:hover .item-foot { opacity: 0; }
+.item.image .item-foot,
+.item.freehand .item-foot { display: none; }
+
+/* Draw bar is centred on the viewport, not on the top-right HUD stack */
+.draw-bar {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  top: auto;
+  bottom: 112px;
+  transform: translateX(-50%);
+  z-index: 40;
+}
+
+/* Dock buttons can be dragged onto the canvas */
+.canvas-dock .dock-btn[draggable="true"] { cursor: grab; }
+.canvas-dock .dock-btn[draggable="true"]:active { cursor: grabbing; }
+.dock-btn.dragging { opacity: 0.45; transform: scale(0.94); }
+
+/* Placement hint sits above the dock instead of over the corner chip */
+.canvas-wrap.placing .hud-card.ghost,
+.placing-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 112px;
+  transform: translateX(-50%);
+  z-index: 30;
+}
+
+/* Link draft field */
+.link-draft { z-index: 45; width: 280px; }
+.link-draft-input { width: 100%; }

@@ -390,6 +390,7 @@ export default function Canvas({
   const [panning, setPanning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [linkPoint, setLinkPoint] = useState<{ x: number; y: number } | null>(null)
+  const [dragTool, setDragTool] = useState<Tool | null>(null)
   const [menu, setMenu] = useState<Menu | null>(null)
   const [history, setHistory] = useState({ undo: 0, redo: 0 })
 
@@ -414,6 +415,15 @@ export default function Canvas({
 
   const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
   const colorOf = (id: string) => userMap.get(id)?.color || "#8d8a84"
+  const nameOf = (id: string) => userMap.get(id)?.display_name || "Another member"
+  const ownedByMe = (item: { created_by: string }) => item.created_by === me.id
+  const startEdit = (item: { id: string; created_by: string }) => {
+    if (!ownedByMe(item)) {
+      setToast(nameOf(item.created_by) + " wrote this card, so the text is locked. You can still move, resize and connect it.")
+      return
+    }
+    startEdit(item)
+  }
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
 
   useEffect(() => {
@@ -618,6 +628,13 @@ export default function Canvas({
   const removeItem = useCallback(
     async (id: string) => {
       const snapshot = itemsRef.current.find((i) => i.id === id)
+      if (snapshot && snapshot.created_by !== me.id) {
+        setToast(
+          (userMap.get(snapshot.created_by)?.display_name || "Another member") +
+            " created this card, so only they can delete it.",
+        )
+        return
+      }
       dropLocal(id)
       setMenu(null)
       const res = await apiFetch("/api/items?id=" + id, { method: "DELETE" })
@@ -650,7 +667,7 @@ export default function Canvas({
         },
       })
     },
-    [createRaw, dropLocal, pushStep],
+    [createRaw, dropLocal, pushStep, me.id, userMap],
   )
 
   /** Keep a box clear of every other card. */
@@ -858,7 +875,7 @@ export default function Canvas({
       }
       if (linkUrl) payload.linkUrl = linkUrl
       addItem(payload).then((item) => {
-        if (item && kind !== "link") setEditing(item.id)
+        if (item && kind !== "link") startEdit(item)
       })
     },
     [addItem, me.color, resolve, shapeKind],
@@ -959,6 +976,7 @@ export default function Canvas({
     const point = toBoard(e.clientX, e.clientY)
 
     if (tool === "pen") {
+      ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
       setStroke([point])
       return
     }
@@ -1079,7 +1097,7 @@ export default function Canvas({
       const item = itemsRef.current.find((i) => i.id === d.id)
       if (item && d.kind === "move" && !d.moved) {
         // A single click on a card opens its inputs, Milanote style.
-        if (item.kind !== "image") setEditing(item.id)
+        if (item.kind !== "image") startEdit(item)
       } else if (item) {
         const spot = resolve(
           { x: item.x, y: item.y, width: item.width, height: item.height },
@@ -1237,12 +1255,23 @@ export default function Canvas({
       onPointerUp={onWrapPointerUp}
       onPointerCancel={onWrapPointerUp}
       onDragOver={(e) => {
+        if (dragTool) e.dataTransfer.dropEffect = "copy"
         if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
           e.preventDefault()
           e.dataTransfer.dropEffect = "copy"
         }
       }}
       onDrop={(e) => {
+        const dropped = e.dataTransfer?.getData("text/ohq-tool") || ""
+        if (dropped) {
+          e.preventDefault()
+          const at = toBoard(e.clientX, e.clientY)
+          setTool("select")
+          setDragTool(null)
+          if (dropped === "link") setLinkPoint(at)
+          else placeItem(dropped as Tool, { x: at.x - 120, y: at.y - 60 })
+          return
+        }
         const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
           f.type.startsWith("image/"),
         )
@@ -1429,7 +1458,7 @@ export default function Canvas({
               onDoubleClick={(e) => {
                 e.stopPropagation()
                 setSelected(item.id)
-                setEditing(item.id)
+                startEdit(item)
               }}
             >
               {isShape ? (
@@ -1542,7 +1571,7 @@ export default function Canvas({
                       onClick={(e) => {
                         e.stopPropagation()
                         setSelected(item.id)
-                        setEditing(item.id)
+                        startEdit(item)
                       }}
                     >
                       {item.title || <span className="item-hint">Untitled — click to name</span>}
@@ -1617,7 +1646,7 @@ export default function Canvas({
                   onPointerUp={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                 >
-                  <button className="bar-btn" title="Edit text" onClick={() => setEditing(item.id)}>
+                  <button className="bar-btn" title="Edit text" onClick={() => startEdit(item)}>
                     <IconText size={15} />
                   </button>
                   <button className="bar-btn" title="Connect to another card" onClick={() => startWire(item)}>
@@ -1662,7 +1691,7 @@ export default function Canvas({
           <button
             className="ctx-item"
             onClick={() => {
-              setEditing(menuItem.id)
+              startEdit(menuItem)
               setMenu(null)
             }}
           >
@@ -1717,9 +1746,8 @@ export default function Canvas({
         <div
           className="link-draft"
           style={{
-            left: pan.x + linkPoint.x * zoom - 130 * zoom,
-            top: pan.y + linkPoint.y * zoom - 24 * zoom,
-            transform: `scale(${zoom})`,
+            left: pan.x + linkPoint.x * zoom - 140,
+            top: pan.y + linkPoint.y * zoom - 22,
           }}
           onPointerDown={(e) => e.stopPropagation()}
         >
@@ -1994,21 +2022,42 @@ export default function Canvas({
           <span>Select</span>
         </button>
         <button
-          className={"dock-btn" + (tool === "card" ? " on" : "")}
+          className={"dock-btn" + (tool === "card" ? " on" : "") + (dragTool === "card" ? " dragging" : "")}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/ohq-tool", "card")
+            e.dataTransfer.effectAllowed = "copy"
+            setDragTool("card")
+          }}
+          onDragEnd={() => setDragTool(null)}
           onClick={() => setTool(tool === "card" ? "select" : "card")}
         >
           <IconCard />
           <span>Card</span>
         </button>
         <button
-          className={"dock-btn" + (tool === "sticky" ? " on" : "")}
+          className={"dock-btn" + (tool === "sticky" ? " on" : "") + (dragTool === "sticky" ? " dragging" : "")}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/ohq-tool", "sticky")
+            e.dataTransfer.effectAllowed = "copy"
+            setDragTool("sticky")
+          }}
+          onDragEnd={() => setDragTool(null)}
           onClick={() => setTool(tool === "sticky" ? "select" : "sticky")}
         >
           <IconSticky />
           <span>Note</span>
         </button>
         <button
-          className={"dock-btn" + (tool === "text" ? " on" : "")}
+          className={"dock-btn" + (tool === "text" ? " on" : "") + (dragTool === "text" ? " dragging" : "")}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/ohq-tool", "text")
+            e.dataTransfer.effectAllowed = "copy"
+            setDragTool("text")
+          }}
+          onDragEnd={() => setDragTool(null)}
           onClick={() => setTool(tool === "text" ? "select" : "text")}
         >
           <IconText />
@@ -2017,7 +2066,15 @@ export default function Canvas({
 
         <div className="dock-shape">
           <button
-            className={"dock-btn" + (tool === "shape" ? " on" : "")}
+            className={"dock-btn" + (tool === "shape" ? " on" : "") + (dragTool === "shape" ? " dragging" : "")}
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData("text/ohq-tool", "shape")
+              e.dataTransfer.effectAllowed = "copy"
+              setDragTool("shape")
+              setShapeMenu(false)
+            }}
+            onDragEnd={() => setDragTool(null)}
             onClick={() => {
               setShapeMenu((v) => !v)
               setTool("shape")
@@ -2054,7 +2111,14 @@ export default function Canvas({
           <span>Draw</span>
         </button>
         <button
-          className={"dock-btn" + (tool === "link" ? " on" : "")}
+          className={"dock-btn" + (tool === "link" ? " on" : "") + (dragTool === "link" ? " dragging" : "")}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/ohq-tool", "link")
+            e.dataTransfer.effectAllowed = "copy"
+            setDragTool("link")
+          }}
+          onDragEnd={() => setDragTool(null)}
           onClick={() => setTool(tool === "link" ? "select" : "link")}
         >
           <IconLink />
