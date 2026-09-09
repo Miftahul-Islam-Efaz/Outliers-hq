@@ -838,3 +838,133 @@
 .canvas-hud .hud-card { font-size: 11.5px; padding: 5px 9px; }
 .inspector { top: 16px; right: 16px; width: 214px; padding: 10px; gap: 8px; }
 .insp-label { font-size: 10px; }
+
+/* ==== Milanote-style canvas pass ==== */
+
+/* the arrow cursor is the default now that dragging draws a selection box */
+.canvas-wrap { cursor: default; }
+.canvas-wrap.panning { cursor: grabbing; }
+
+/* selection box */
+.marquee {
+  fill: rgba(255, 106, 0, 0.08);
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  vector-effect: non-scaling-stroke;
+}
+.item.picked { box-shadow: 0 0 0 2px var(--accent), var(--shadow-soft); }
+
+/* note card: a plain text box you click into and type */
+.note-input {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  width: 100%;
+  min-height: 100%;
+  padding: 14px 16px;
+  border: none;
+  outline: none;
+  resize: none;
+  overflow: hidden;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  border-radius: inherit;
+}
+.note-text {
+  padding: 14px 16px 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow: hidden;
+}
+.item.sticky .item-foot { opacity: 0; transition: opacity 0.12s ease; }
+.item.sticky:hover .item-foot { opacity: 1; }
+
+/* flat dock \u2014 icon over a small label, no boxed buttons */
+.canvas-dock.flat {
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 14px;
+  border-color: rgba(17, 17, 16, 0.08);
+  box-shadow: 0 10px 30px rgba(17, 17, 16, 0.12);
+}
+.canvas-dock.flat .dock-btn {
+  flex-direction: column;
+  gap: 3px;
+  width: 58px;
+  min-width: 58px;
+  height: 50px;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--ink-soft);
+}
+.canvas-dock.flat .dock-btn span {
+  font-size: 10.5px;
+  font-weight: 550;
+  letter-spacing: 0;
+  color: var(--muted);
+}
+.canvas-dock.flat .dock-btn:hover { background: rgba(17, 17, 16, 0.05); color: var(--ink); }
+.canvas-dock.flat .dock-btn:hover span { color: var(--ink-soft); }
+.canvas-dock.flat .dock-btn.on,
+.canvas-dock.flat .dock-btn.accent.on {
+  background: rgba(255, 106, 0, 0.1);
+  color: var(--accent);
+}
+.canvas-dock.flat .dock-btn.on span { color: var(--accent); }
+.canvas-dock.flat .dock-btn:disabled { opacity: 0.35; }
+.canvas-dock.flat .dock-btn:disabled:hover { background: transparent; }
+.canvas-dock.flat .dock-btn.sm {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  flex-direction: row;
+}
+.canvas-dock.flat .dock-sep { height: 28px; background: rgba(17, 17, 16, 0.08); }
+.canvas-dock.flat .shape-menu { border-radius: 12px; }
+
+/* draw mode bar */
+.draw-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 14px;
+  background: #111110;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 550;
+  box-shadow: var(--shadow-float);
+}
+.draw-done {
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+.draw-done:hover { filter: brightness(1.06); }
+
+.hud-card.danger {
+  background: #111110;
+  border-color: #111110;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.hud-card.danger:hover { background: #d33f34; border-color: #d33f34; }
+
+@media (max-width: 720px) {
+  .canvas-dock.flat .dock-btn { width: 46px; min-width: 46px; height: 44px; }
+  .canvas-dock.flat .dock-btn span { display: none; }
+}

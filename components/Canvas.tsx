@@ -38,6 +38,7 @@ type Tool = "select" | "card" | "sticky" | "text" | "shape" | "pen" | "link"
 
 type Drag =
   | { kind: "pan"; startX: number; startY: number; panX: number; panY: number }
+  | { kind: "marquee"; startX: number; startY: number }
   | {
       kind: "move"
       id: string
@@ -115,6 +116,55 @@ function freeSpot(box: Box, others: Box[]): Box {
   return candidate
 }
 
+function grow(el: HTMLTextAreaElement | null) {
+  if (!el) return
+  el.style.height = "auto"
+  el.style.height = el.scrollHeight + "px"
+}
+
+/** A note is just a text box: click it and type, exactly like Milanote. */
+function NoteEditor({
+  item,
+  onSave,
+  onClose,
+}: {
+  item: BoardItem
+  onSave: (body: string) => void
+  onClose: () => void
+}) {
+  const box = useRef<HTMLTextAreaElement | null>(null)
+  const [body, setBody] = useState(item.body || "")
+
+  useEffect(() => {
+    grow(box.current)
+    const node = box.current
+    if (!node) return
+    node.focus()
+    node.setSelectionRange(node.value.length, node.value.length)
+  }, [])
+
+  return (
+    <textarea
+      ref={box}
+      className="note-input"
+      value={body}
+      placeholder="Start typing…"
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onChange={(e) => {
+        setBody(e.target.value)
+        grow(e.target as HTMLTextAreaElement)
+        onSave(e.target.value)
+      }}
+      onBlur={() => onClose()}
+      onKeyDown={(e) => {
+        e.stopPropagation()
+        if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur()
+      }}
+    />
+  )
+}
+
 function CardEditor({
   item,
   onSave,
@@ -148,7 +198,7 @@ function CardEditor({
         className="edit-title"
         autoFocus
         value={title}
-        placeholder="Card name"
+        placeholder="Start typing…"
         onChange={(e) => {
           setTitle(e.target.value)
           onSave({ title: e.target.value, body })
@@ -169,7 +219,6 @@ function CardEditor({
           onSave({ title, body: e.target.value })
         }}
       />
-      <div className="edit-hint">Saves as you type · Esc to close</div>
     </div>
   )
 }
@@ -200,6 +249,13 @@ export default function Canvas({
   const [stroke, setStroke] = useState<{ x: number; y: number }[] | null>(null)
   const [hoverEdge, setHoverEdge] = useState<string | null>(null)
   const [hoverTarget, setHoverTarget] = useState<string | null>(null)
+  const [picked, setPicked] = useState<string[]>([])
+  const [marquee, setMarquee] = useState<{
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+  } | null>(null)
   const [panning, setPanning] = useState(false)
   const [toast, setToast] = useState<string | null>(null)
   const [linkPoint, setLinkPoint] = useState<{ x: number; y: number } | null>(null)
@@ -212,10 +268,16 @@ export default function Canvas({
   const zoomRef = useRef(zoom)
   const wireRef = useRef<Wire | null>(null)
   const itemsRef = useRef(items)
+  const pickedRef = useRef(picked)
+  const marqueeRef = useRef(marquee)
+  const spaceRef = useRef(false)
+  const groupRef = useRef<Array<{ id: string; x: number; y: number }> | null>(null)
   panRef.current = pan
   zoomRef.current = zoom
   wireRef.current = wire
   itemsRef.current = items
+  pickedRef.current = picked
+  marqueeRef.current = marquee
   const past = useRef<Step[]>([])
   const future = useRef<Step[]>([])
 
@@ -237,6 +299,21 @@ export default function Canvas({
     window.addEventListener("pointerdown", close)
     return () => window.removeEventListener("pointerdown", close)
   }, [menu])
+
+  useEffect(() => {
+    function down(e: KeyboardEvent) {
+      if (e.code === "Space") spaceRef.current = true
+    }
+    function up(e: KeyboardEvent) {
+      if (e.code === "Space") spaceRef.current = false
+    }
+    window.addEventListener("keydown", down)
+    window.addEventListener("keyup", up)
+    return () => {
+      window.removeEventListener("keydown", down)
+      window.removeEventListener("keyup", up)
+    }
+  }, [])
 
   const toBoard = useCallback((clientX: number, clientY: number) => {
     const rect = wrap.current?.getBoundingClientRect()
@@ -288,17 +365,16 @@ export default function Canvas({
     if (!node) return
     function onWheel(e: WheelEvent) {
       e.preventDefault()
-      // Scrolling zooms at the cursor. Shift or Alt pans instead.
+      // Ctrl / Cmd + scroll zooms at the cursor. A plain scroll pans the board.
+      if (e.ctrlKey || e.metaKey) {
+        zoomTo(zoomRef.current * Math.exp(-e.deltaY * 0.0035), e.clientX, e.clientY)
+        return
+      }
       if (e.shiftKey) {
         setPan((p) => ({ x: p.x - (e.deltaX || e.deltaY), y: p.y }))
         return
       }
-      if (e.altKey) {
-        setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }))
-        return
-      }
-      const step = e.ctrlKey || e.metaKey ? 0.0035 : 0.0022
-      zoomTo(zoomRef.current * Math.exp(-e.deltaY * step), e.clientX, e.clientY)
+      setPan((p) => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }))
     }
     node.addEventListener("wheel", onWheel, { passive: false })
     return () => node.removeEventListener("wheel", onWheel)
@@ -510,13 +586,23 @@ export default function Canvas({
         return
       }
       if (typing) return
-      if ((e.key === "Delete" || e.key === "Backspace") && selected) {
-        e.preventDefault()
-        removeItem(selected)
-        return
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const many = pickedRef.current
+        if (many.length > 1) {
+          e.preventDefault()
+          many.forEach((id) => removeItem(id))
+          setPicked([])
+          return
+        }
+        if (selected) {
+          e.preventDefault()
+          removeItem(selected)
+          return
+        }
       }
       if (e.key === "Escape") {
         setWire(null)
+        setPicked([])
         setTool("select")
         setShapeMenu(false)
         setSelected(null)
@@ -647,6 +733,55 @@ export default function Canvas({
     [addItem, me.color, resolve, shapeKind],
   )
 
+  /** Upload one image file and place it on the board. */
+  const addImageFile = useCallback(
+    async (file: File, at: { x: number; y: number }) => {
+      setToast("Uploading image…")
+      const dataUrl = await new Promise<string>((done) => {
+        const reader = new FileReader()
+        reader.onload = () => done(String(reader.result || ""))
+        reader.onerror = () => done("")
+        reader.readAsDataURL(file)
+      })
+      if (!dataUrl) {
+        setToast("Could not read that image")
+        return
+      }
+      const res = await apiFetch("/api/upload", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dataUrl }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.url) {
+        setToast(data?.error || "Could not upload that image")
+        return
+      }
+      const width = 300
+      const height = 220
+      const spot = resolve({
+        x: Math.round(at.x - width / 2),
+        y: Math.round(at.y - height / 2),
+        width,
+        height,
+      })
+      await addItem({
+        kind: "image",
+        shape: "none",
+        title: "",
+        body: "",
+        linkUrl: data.url,
+        x: Math.round(spot.x),
+        y: Math.round(spot.y),
+        width,
+        height,
+        style: {},
+      })
+      setToast("Image added")
+    },
+    [addItem, resolve],
+  )
+
   /** Paste an image file or a link straight onto the canvas. */
   useEffect(() => {
     async function onPaste(e: ClipboardEvent) {
@@ -660,59 +795,24 @@ export default function Canvas({
       const rect = wrap.current?.getBoundingClientRect()
       if (!rect) return
       const center = toBoard(rect.left + rect.width / 2, rect.top + rect.height / 2)
-      const entries = Array.from(e.clipboardData?.items || [])
-      const picture = entries.find((it) => it.kind === "file" && it.type.startsWith("image/"))
+      const clip = e.clipboardData
+      if (!clip) return
+      const files = Array.from(clip.files || [])
+      const entries = Array.from(clip.items || [])
+      const picture =
+        files.find((f) => f.type.startsWith("image/")) ||
+        entries
+          .filter((it) => it.kind === "file" && it.type.startsWith("image/"))
+          .map((it) => it.getAsFile())
+          .find((f): f is File => !!f)
 
       if (picture) {
         e.preventDefault()
-        const file = picture.getAsFile()
-        if (!file) return
-        setToast("Uploading image…")
-        const dataUrl = await new Promise<string>((done) => {
-          const reader = new FileReader()
-          reader.onload = () => done(String(reader.result || ""))
-          reader.onerror = () => done("")
-          reader.readAsDataURL(file)
-        })
-        if (!dataUrl) {
-          setToast("Could not read that image")
-          return
-        }
-        const res = await apiFetch("/api/upload", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ dataUrl }),
-        })
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok || !data?.url) {
-          setToast(data?.error || "Could not upload that image")
-          return
-        }
-        const width = 300
-        const height = 220
-        const spot = resolve({
-          x: Math.round(center.x - width / 2),
-          y: Math.round(center.y - height / 2),
-          width,
-          height,
-        })
-        await addItem({
-          kind: "image",
-          shape: "none",
-          title: "",
-          body: "",
-          linkUrl: data.url,
-          x: Math.round(spot.x),
-          y: Math.round(spot.y),
-          width,
-          height,
-          style: {},
-        })
-        setToast("Image added")
+        await addImageFile(picture, center)
         return
       }
 
-      const text = (e.clipboardData?.getData("text/plain") || "").trim()
+      const text = (clip.getData("text/plain") || "").trim()
       if (text && /^https?:/i.test(text) && !text.includes(" ")) {
         e.preventDefault()
         placeItem("link", center, text)
@@ -720,10 +820,10 @@ export default function Canvas({
     }
     window.addEventListener("paste", onPaste)
     return () => window.removeEventListener("paste", onPaste)
-  }, [addItem, placeItem, resolve, toBoard])
+  }, [addImageFile, placeItem, toBoard])
 
   function onWrapPointerDown(e: React.PointerEvent) {
-    if (e.button !== 0) return
+    if (e.button !== 0 && e.button !== 1) return
     setMenu(null)
     const point = toBoard(e.clientX, e.clientY)
 
@@ -747,9 +847,15 @@ export default function Canvas({
     setSelected(null)
     setEditing(null)
     setWire(null)
-    drag.current = { kind: "pan", startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
-    setPanning(true)
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    if (e.altKey || spaceRef.current || e.button === 1) {
+      drag.current = { kind: "pan", startX: e.clientX, startY: e.clientY, panX: pan.x, panY: pan.y }
+      setPanning(true)
+      return
+    }
+    setPicked([])
+    drag.current = { kind: "marquee", startX: e.clientX, startY: e.clientY }
+    setMarquee({ x1: point.x, y1: point.y, x2: point.x, y2: point.y })
   }
 
   function onWrapPointerMove(e: React.PointerEvent) {
@@ -768,12 +874,25 @@ export default function Canvas({
       setPan({ x: d.panX + (e.clientX - d.startX), y: d.panY + (e.clientY - d.startY) })
       return
     }
+    if (d.kind === "marquee") {
+      const from = toBoard(d.startX, d.startY)
+      const to = toBoard(e.clientX, e.clientY)
+      setMarquee({ x1: from.x, y1: from.y, x2: to.x, y2: to.y })
+      return
+    }
     const dx = (e.clientX - d.startX) / zoomRef.current
     const dy = (e.clientY - d.startY) / zoomRef.current
     if (Math.abs(e.clientX - d.startX) > 3 || Math.abs(e.clientY - d.startY) > 3) d.moved = true
     if (!d.moved) return
     if (d.kind === "move") {
-      updateLocal(d.id, { x: Math.round(d.itemX + dx), y: Math.round(d.itemY + dy) })
+      const group = groupRef.current
+      if (group && group.length > 1) {
+        group.forEach((g) => {
+          updateLocal(g.id, { x: Math.round(g.x + dx), y: Math.round(g.y + dy) })
+        })
+      } else {
+        updateLocal(d.id, { x: Math.round(d.itemX + dx), y: Math.round(d.itemY + dy) })
+      }
     } else {
       updateLocal(d.id, {
         width: Math.max(120, Math.round(d.w + dx)),
@@ -787,12 +906,44 @@ export default function Canvas({
       const points = stroke
       setStroke(null)
       if (points.length > 3) await commitStroke(points)
-      setTool("select")
       return
     }
     const d = drag.current
     drag.current = null
     setPanning(false)
+    if (d && d.kind === "marquee") {
+      const box = marqueeRef.current
+      setMarquee(null)
+      if (box) {
+        const left = Math.min(box.x1, box.x2)
+        const right = Math.max(box.x1, box.x2)
+        const top = Math.min(box.y1, box.y2)
+        const bottom = Math.max(box.y1, box.y2)
+        if (right - left > 6 || bottom - top > 6) {
+          const inside = itemsRef.current
+            .filter(
+              (i) =>
+                i.x < right && i.x + i.width > left && i.y < bottom && i.y + i.height > top,
+            )
+            .map((i) => i.id)
+          setPicked(inside)
+          if (inside.length === 1) setSelected(inside[0])
+        }
+      }
+      return
+    }
+    if (d && (d.kind === "move" || d.kind === "resize")) {
+      const group = groupRef.current
+      groupRef.current = null
+      if (d.kind === "move" && d.moved && group && group.length > 1) {
+        for (const g of group) {
+          const moved = itemsRef.current.find((i) => i.id === g.id)
+          if (moved) await patchItem(moved.id, { x: moved.x, y: moved.y })
+        }
+        if (wireRef.current?.moved) setWire(null)
+        return
+      }
+    }
     if (d && (d.kind === "move" || d.kind === "resize")) {
       const item = itemsRef.current.find((i) => i.id === d.id)
       if (item && d.kind === "move" && !d.moved) {
@@ -861,6 +1012,12 @@ export default function Canvas({
   function startMove(e: React.PointerEvent, item: BoardItem) {
     if (tool !== "select" || editing === item.id) return
     setSelected(item.id)
+    const chosen = pickedRef.current.includes(item.id) ? pickedRef.current : []
+    if (chosen.length < 2) setPicked([])
+    groupRef.current = (chosen.length > 1 ? chosen : [item.id])
+      .map((id) => itemsRef.current.find((i) => i.id === id))
+      .filter((i): i is BoardItem => !!i)
+      .map((i) => ({ id: i.id, x: i.x, y: i.y }))
     drag.current = {
       kind: "move",
       id: item.id,
@@ -945,6 +1102,21 @@ export default function Canvas({
       onPointerMove={onWrapPointerMove}
       onPointerUp={onWrapPointerUp}
       onPointerCancel={onWrapPointerUp}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer?.types || []).includes("Files")) {
+          e.preventDefault()
+          e.dataTransfer.dropEffect = "copy"
+        }
+      }}
+      onDrop={(e) => {
+        const files = Array.from(e.dataTransfer?.files || []).filter((f) =>
+          f.type.startsWith("image/"),
+        )
+        if (files.length === 0) return
+        e.preventDefault()
+        const point = toBoard(e.clientX, e.clientY)
+        files.forEach((f, i) => addImageFile(f, { x: point.x + i * 24, y: point.y + i * 24 }))
+      }}
       onContextMenu={(e) => {
         if (!(e.target as HTMLElement).closest(".item")) return
         e.preventDefault()
@@ -1037,6 +1209,16 @@ export default function Canvas({
           {strokePath ? (
             <path className="edge-live" stroke={me.color} d={strokePath} fill="none" />
           ) : null}
+
+          {marquee ? (
+            <rect
+              className="marquee"
+              x={Math.min(marquee.x1, marquee.x2)}
+              y={Math.min(marquee.y1, marquee.y2)}
+              width={Math.abs(marquee.x2 - marquee.x1)}
+              height={Math.abs(marquee.y2 - marquee.y1)}
+            />
+          ) : null}
         </svg>
 
         {items.map((item) => {
@@ -1058,6 +1240,7 @@ export default function Canvas({
                 "item " +
                 item.kind +
                 (isSelected ? " selected" : "") +
+                (picked.includes(item.id) ? " picked" : "") +
                 (isTarget ? " target" : "") +
                 (isEditing ? " editing" : "") +
                 (dark ? " dark" : "")
@@ -1139,7 +1322,13 @@ export default function Canvas({
                 </svg>
               ) : null}
 
-              {isEditing && isPlain ? (
+              {isEditing && item.kind === "sticky" ? (
+                <NoteEditor
+                  item={item}
+                  onClose={() => setEditing(null)}
+                  onSave={(body) => queueSave(item.id, { body })}
+                />
+              ) : isEditing && isPlain ? (
                 <CardEditor
                   item={item}
                   onCancel={() => setEditing(null)}
@@ -1168,6 +1357,10 @@ export default function Canvas({
                     if (e.key === "Escape") (e.target as HTMLTextAreaElement).blur()
                   }}
                 />
+              ) : item.kind === "sticky" ? (
+                <div className="note-text">
+                  {item.body || <span className="item-hint">Start typing…</span>}
+                </div>
               ) : isPlain ? (
                 <>
                   <div className="item-top">
@@ -1243,7 +1436,7 @@ export default function Canvas({
                 onClick={(e) => e.stopPropagation()}
               />
 
-              {isSelected && !isEditing ? (
+              {(isSelected || hoverTarget === item.id) && !isEditing && !wire ? (
                 <div
                   className="item-bar"
                   onPointerDown={(e) => e.stopPropagation()}
@@ -1367,13 +1560,29 @@ export default function Canvas({
           </div>
         ) : null}
         {tool === "pen" ? (
-          <div className="linking-note">Draw any shape — it becomes a card you can write in</div>
+          <div className="draw-note">
+            <span>Draw freely — every stroke is saved</span>
+            <button className="draw-done" onClick={() => setTool("select")}>
+              Done
+            </button>
+          </div>
         ) : null}
         {tool !== "select" && tool !== "pen" ? (
           <div className="linking-note">Click anywhere on the canvas to place it</div>
         ) : null}
-        {!selected && tool === "select" && !wire ? (
-          <div className="hud-card ghost">Scroll to zoom · click a card to write</div>
+        {picked.length > 1 ? (
+          <button
+            className="hud-card danger"
+            onClick={() => {
+              picked.forEach((id) => removeItem(id))
+              setPicked([])
+            }}
+          >
+            Delete {picked.length} selected
+          </button>
+        ) : null}
+        {!selected && picked.length === 0 && tool === "select" && !wire ? (
+          <div className="hud-card ghost">Drag to select · Ctrl + scroll to zoom</div>
         ) : null}
         {toast ? <div className="linking-note warn">{toast}</div> : null}
       </div>
@@ -1507,7 +1716,7 @@ export default function Canvas({
         </div>
       ) : null}
 
-      <div className="canvas-dock labelled" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="canvas-dock labelled flat" onPointerDown={(e) => e.stopPropagation()}>
         <button
           className={"dock-btn" + (tool === "select" ? " on" : "")}
           onClick={() => {
