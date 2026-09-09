@@ -1215,3 +1215,137 @@
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* ==== Drawing + icon alignment pass ==== */
+
+/* a drawing is ink on the board: no card, no fill, no shadow */
+.item.freehand {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  padding: 0;
+}
+.item.freehand .shape-svg { overflow: visible; }
+.item.freehand:hover { border-color: rgba(17, 17, 16, 0.14) !important; }
+.item.freehand.selected {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 2px var(--accent-soft) !important;
+}
+.item.freehand .item-text { display: none; }
+.item.freehand .item-foot { display: none; }
+
+/* eraser cursor while erasing strokes */
+.canvas-wrap.erasing .item { pointer-events: auto; cursor: cell; }
+.canvas-wrap.erasing .item.freehand:hover {
+  border-color: #d33f34 !important;
+  box-shadow: 0 0 0 2px rgba(211, 63, 52, 0.18) !important;
+}
+
+/* every icon centres on its own baseline \u2014 this is what was pushing glyphs off-centre */
+.dock-btn svg,
+.bar-btn svg,
+.rail-btn svg,
+.draw-tool svg,
+.hud-card svg,
+.insp-group svg {
+  display: block;
+  flex: none;
+}
+.bar-btn,
+.dock-btn,
+.rail-btn,
+.draw-tool {
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+.canvas-dock.flat .dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+.item-bar { align-items: center; }
+.bar-btn { width: 30px; height: 30px; padding: 0; }
+
+/* drawing toolbar, mirroring Milanote's */
+.draw-bar {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid rgba(17, 17, 16, 0.08);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px rgba(17, 17, 16, 0.16);
+  animation: fadeUp 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.draw-tool {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, transform 0.12s ease;
+}
+.draw-tool:hover { background: rgba(17, 17, 16, 0.06); color: var(--ink); }
+.draw-tool:active { transform: scale(0.92); }
+.draw-tool.on { background: var(--ink); color: #fff; }
+.draw-sep { width: 1px; height: 22px; background: rgba(17, 17, 16, 0.1); }
+
+.draw-inks { display: flex; align-items: center; gap: 5px; }
+.draw-ink {
+  width: 18px;
+  height: 18px;
+  border: 2px solid #fff;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1px rgba(17, 17, 16, 0.14);
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.13s ease, box-shadow 0.13s ease;
+}
+.draw-ink:hover { transform: scale(1.14); }
+.draw-ink.on { transform: scale(1.2); box-shadow: 0 0 0 2px var(--ink); }
+
+.draw-nibs { display: flex; align-items: center; gap: 2px; }
+.draw-nib {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.13s ease;
+}
+.draw-nib span { display: block; border-radius: 999px; background: var(--ink-soft); }
+.draw-nib:hover { background: rgba(17, 17, 16, 0.06); }
+.draw-nib.on { background: rgba(255, 106, 0, 0.12); }
+.draw-nib.on span { background: var(--accent); }
+
+.draw-text,
+.draw-save {
+  border: none;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.13s ease, color 0.13s ease, transform 0.12s ease;
+}
+.draw-text { background: transparent; color: var(--muted); }
+.draw-text:hover:not(:disabled) { background: rgba(17, 17, 16, 0.06); color: var(--ink); }
+.draw-text:disabled { opacity: 0.4; cursor: default; }
+.draw-save { background: var(--accent); color: #fff; }
+.draw-save:hover { filter: brightness(1.06); }
+.draw-text:active, .draw-save:active { transform: scale(0.95); }

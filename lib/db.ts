@@ -58,6 +58,7 @@ export type ItemStyle = {
   align?: "left" | "center" | "right"
   color?: string
   italic?: boolean
+  strokeWidth?: number
   path?: string
 }
 

@@ -23,6 +23,7 @@ import {
   IconDuplicate,
   IconEllipse,
   IconFit,
+  IconEraser,
   IconPen,
   IconRedo,
   IconRound,
@@ -369,6 +370,14 @@ export default function Canvas({
   const [shapeMenu, setShapeMenu] = useState(false)
   const [wire, setWire] = useState<Wire | null>(null)
   const [stroke, setStroke] = useState<{ x: number; y: number }[] | null>(null)
+  const [ink, setInk] = useState("#111110")
+  const [nib, setNib] = useState(3)
+  const [erasing, setErasing] = useState(false)
+  const [drawCount, setDrawCount] = useState(0)
+  const inkRef = useRef(ink)
+  const nibRef = useRef(nib)
+  inkRef.current = ink
+  nibRef.current = nib
   const [hoverEdge, setHoverEdge] = useState<string | null>(null)
   const [hoverTarget, setHoverTarget] = useState<string | null>(null)
   const [picked, setPicked] = useState<string[]>([])
@@ -1120,8 +1129,9 @@ export default function Canvas({
       title: "",
       body: "",
       style: {
-        fill: "#FFFFFF",
-        stroke: me.color,
+        fill: "none",
+        stroke: inkRef.current,
+        strokeWidth: nibRef.current,
         fontSize: 15,
         fontWeight: 500,
         align: "center",
@@ -1129,6 +1139,7 @@ export default function Canvas({
         path,
       },
     })
+    setDrawCount((n) => n + 1)
   }
 
   function startMove(e: React.PointerEvent, item: BoardItem) {
@@ -1218,6 +1229,7 @@ export default function Canvas({
         (panning ? " panning" : "") +
         (tool !== "select" ? " placing" : "") +
         (tool === "pen" ? " drawing" : "") +
+        (tool === "pen" && erasing ? " erasing" : "") +
         (wire ? " linking" : "")
       }
       onPointerDown={onWrapPointerDown}
@@ -1329,7 +1341,15 @@ export default function Canvas({
           ) : null}
 
           {strokePath ? (
-            <path className="edge-live" stroke={me.color} d={strokePath} fill="none" />
+            <path
+              className="edge-live"
+              stroke={ink}
+              strokeWidth={nib}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d={strokePath}
+              fill="none"
+            />
           ) : null}
 
           {marquee ? (
@@ -1361,6 +1381,7 @@ export default function Canvas({
               className={
                 "item " +
                 item.kind +
+                (item.shape === "freehand" ? " freehand" : "") +
                 (isSelected ? " selected" : "") +
                 (picked.includes(item.id) ? " picked" : "") +
                 (isTarget ? " target" : "") +
@@ -1379,6 +1400,10 @@ export default function Canvas({
               onPointerDown={(e) => {
                 e.stopPropagation()
                 setMenu(null)
+                if (tool === "pen" && erasing) {
+                  removeItem(item.id)
+                  return
+                }
                 if (wire && wire.fromId !== item.id) {
                   connect(wire.fromId, item.id)
                   setWire(null)
@@ -1435,10 +1460,18 @@ export default function Canvas({
                   ) : (
                     <path
                       d={path}
-                      fill={style.fill || "#fff"}
+                      fill={
+                        item.shape === "freehand"
+                          ? "none"
+                          : style.fill === "none"
+                            ? "none"
+                            : style.fill || "#fff"
+                      }
                       stroke={style.stroke || author?.color || "#111"}
                       vectorEffect="non-scaling-stroke"
-                      strokeWidth="1.8"
+                      strokeWidth={
+                        item.shape === "freehand" ? style.strokeWidth || 3 : 1.8
+                      }
                       strokeLinejoin="round"
                       strokeLinecap="round"
                     />
@@ -1546,7 +1579,10 @@ export default function Canvas({
                     color: style.color || "#111110",
                   }}
                 >
-                  {item.body || <span className="item-hint">Double-click to write</span>}
+                  {item.body ||
+                    (item.shape === "freehand" ? null : (
+                      <span className="item-hint">Double-click to write</span>
+                    ))}
                 </div>
               )}
 
@@ -1722,10 +1758,78 @@ export default function Canvas({
           </div>
         ) : null}
         {tool === "pen" ? (
-          <div className="draw-note">
-            <span>Draw freely — every stroke is saved</span>
-            <button className="draw-done" onClick={() => setTool("select")}>
-              Done
+          <div className="draw-bar" onPointerDown={(e) => e.stopPropagation()}>
+            <button
+              className={"draw-tool" + (!erasing ? " on" : "")}
+              title="Pen"
+              onClick={() => setErasing(false)}
+            >
+              <IconPen size={16} />
+            </button>
+            <button
+              className={"draw-tool" + (erasing ? " on" : "")}
+              title="Eraser"
+              onClick={() => setErasing(true)}
+            >
+              <IconEraser size={16} />
+            </button>
+
+            <span className="draw-sep" />
+
+            <div className="draw-inks">
+              {["#111110", "#FF6A00", "#2783DE", "#46A171", "#8B5CF6", "#E56458"].map((c) => (
+                <button
+                  key={c}
+                  className={"draw-ink" + (ink === c && !erasing ? " on" : "")}
+                  style={{ background: c }}
+                  title="Ink colour"
+                  onClick={() => {
+                    setInk(c)
+                    setErasing(false)
+                  }}
+                />
+              ))}
+            </div>
+
+            <span className="draw-sep" />
+
+            <div className="draw-nibs">
+              {[2, 3, 5, 8].map((w) => (
+                <button
+                  key={w}
+                  className={"draw-nib" + (nib === w ? " on" : "")}
+                  title={w + "px"}
+                  onClick={() => {
+                    setNib(w)
+                    setErasing(false)
+                  }}
+                >
+                  <span style={{ width: w + 4, height: w + 4 }} />
+                </button>
+              ))}
+            </div>
+
+            <span className="draw-sep" />
+
+            <button
+              className="draw-text"
+              disabled={drawCount === 0}
+              onClick={async () => {
+                for (let i = 0; i < drawCount; i++) await undo()
+                setDrawCount(0)
+              }}
+            >
+              Discard
+            </button>
+            <button
+              className="draw-save"
+              onClick={() => {
+                setDrawCount(0)
+                setErasing(false)
+                setTool("select")
+              }}
+            >
+              Save
             </button>
           </div>
         ) : null}

@@ -6,7 +6,7 @@ const base = (size: number) => ({
   viewBox: "0 0 24 24",
   fill: "none",
   stroke: "currentColor",
-  strokeWidth: 1.7,
+  strokeWidth: 1.5,
   strokeLinecap: "round" as const,
   strokeLinejoin: "round" as const,
 })
@@ -36,7 +36,7 @@ export const IconSearch = ({ size = 15 }: P) => (
   </svg>
 )
 
-export const IconPlus = ({ size = 17 }: P) => (
+export const IconPlus = ({ size = 16 }: P) => (
   <svg {...base(size)}>
     <path d="M12 5v14M5 12h14" />
   </svg>
@@ -54,10 +54,11 @@ export const IconDown = ({ size = 14 }: P) => (
   </svg>
 )
 
-export const IconLink = ({ size = 13 }: P) => (
+export const IconLink = ({ size = 15 }: P) => (
   <svg {...base(size)}>
-    <path d="M10 13.5a4 4 0 005.7 0l3-3a4 4 0 10-5.7-5.7l-1 1" />
-    <path d="M14 10.5a4 4 0 00-5.7 0l-3 3a4 4 0 105.7 5.7l1-1" />
+    <path d="M10.5 13.5l3-3" />
+    <path d="M12.8 8.2l1.4-1.4a3.3 3.3 0 014.7 4.7l-1.4 1.4" />
+    <path d="M11.2 15.8l-1.4 1.4a3.3 3.3 0 01-4.7-4.7l1.4-1.4" />
   </svg>
 )
 
@@ -74,43 +75,43 @@ export const IconLogout = ({ size = 18 }: P) => (
   </svg>
 )
 
-export const IconCard = ({ size = 17 }: P) => (
+export const IconCard = ({ size = 16 }: P) => (
   <svg {...base(size)}>
-    <rect x="4" y="5" width="16" height="14" rx="2.2" />
-    <path d="M7.5 9.5h9M7.5 13h6" />
+    <rect x="4" y="5" width="16" height="14" rx="2.5" />
+    <path d="M8 10h8" />
   </svg>
 )
 
-export const IconSticky = ({ size = 17 }: P) => (
+export const IconSticky = ({ size = 16 }: P) => (
   <svg {...base(size)}>
-    <path d="M5 4h14v10l-5 5H5z" />
+    <path d="M5 4.5h14v9.5l-5 5H5z" />
     <path d="M19 14h-5v5" />
   </svg>
 )
 
-export const IconConnect = ({ size = 17 }: P) => (
+export const IconConnect = ({ size = 16 }: P) => (
   <svg {...base(size)}>
-    <circle cx="6" cy="6.5" r="2.5" />
-    <circle cx="18" cy="17.5" r="2.5" />
-    <path d="M8.5 7.5c4 1 5.5 4 7 8" />
+    <circle cx="6.5" cy="6.5" r="2.5" />
+    <circle cx="17.5" cy="17.5" r="2.5" />
+    <path d="M8.7 8.7l6.6 6.6" />
   </svg>
 )
 
-export const IconTrash = ({ size = 13 }: P) => (
+export const IconTrash = ({ size = 16 }: P) => (
   <svg {...base(size)}>
-    <path d="M4 7h16M9 7V5h6v2M6.5 7l.8 12h9.4l.8-12" />
+    <path d="M5 7.5h14M10 7.5V5.5h4v2M7 7.5l.8 11h8.4l.8-11" />
   </svg>
 )
 
-export const IconMinus = ({ size = 15 }: P) => (
+export const IconMinus = ({ size = 16 }: P) => (
   <svg {...base(size)}>
     <path d="M5 12h14" />
   </svg>
 )
 
-export const IconTarget = ({ size = 15 }: P) => (
+export const IconTarget = ({ size = 16 }: P) => (
   <svg {...base(size)}>
-    <circle cx="12" cy="12" r="7" />
-    <path d="M12 3v3M12 18v3M3 12h3M18 12h3" />
+    <circle cx="12" cy="12" r="6.5" />
+    <circle cx="12" cy="12" r="1.6" />
   </svg>
 )
