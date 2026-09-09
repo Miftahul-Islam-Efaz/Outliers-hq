@@ -1581,3 +1581,57 @@ textarea {
   0%, 100% { transform: rotate(45deg) scale(1); opacity: 1; }
   50% { transform: rotate(135deg) scale(0.7); opacity: 0.55; }
 }
+
+/* --- Live collaboration (pass 8) ------------------------------------------ */
+/* Teammate cursors and "is editing" flags live in board coordinates inside
+   .canvas-layer, so they pan and zoom along with the cards. They must never
+   swallow a click. */
+.live-cursor,
+.live-editing {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  z-index: 60;
+}
+
+.live-cursor {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  transition: transform 90ms linear;
+  will-change: transform;
+}
+
+.live-name,
+.live-editing {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  color: #fff;
+  padding: 4px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  box-shadow: var(--shadow-soft);
+}
+
+.live-name {
+  margin-top: 10px;
+}
+
+.live-editing {
+  animation: fadeDown 160ms cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #46A171;
+  box-shadow: 0 0 0 3px rgba(70, 161, 113, 0.18);
+}
+
+.live-dot.off {
+  background: var(--muted);
+  box-shadow: none;
+}

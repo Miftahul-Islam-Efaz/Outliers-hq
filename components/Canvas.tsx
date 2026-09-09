@@ -4,6 +4,7 @@ import { apiFetch } from "@/lib/base"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { BoardEdge, BoardItem, ItemStyle, User } from "@/lib/db"
 import { initials } from "@/lib/links"
+import { useLive } from "@/lib/useLive"
 import {
   IconCard,
   IconConnect,
@@ -413,6 +414,65 @@ export default function Canvas({
   itemsRef.current = items
   pickedRef.current = picked
   marqueeRef.current = marquee
+
+  // --- Live collaboration -------------------------------------------------
+  // Remote events only touch local state; they never call the save helpers,
+  // so a change can never echo back and forth between two browsers.
+  const onLive = useCallback((event: { type: string; senderId: string; payload?: unknown }) => {
+    const data = event.payload as any
+    if (event.type === "item.upsert") {
+      if (data?.item) {
+        const incoming = data.item as BoardItem
+        setItems((prev) =>
+          prev.some((i) => i.id === incoming.id)
+            ? prev.map((i) => (i.id === incoming.id ? { ...i, ...incoming } : i))
+            : [...prev, incoming],
+        )
+      } else if (data?.id) {
+        setItems((prev) => prev.map((i) => (i.id === data.id ? { ...i, ...data.patch } : i)))
+      }
+      return
+    }
+    if (event.type === "item.remove" && data?.id) {
+      setItems((prev) => prev.filter((i) => i.id !== data.id))
+      setEdges((prev) => prev.filter((e) => e.from_item !== data.id && e.to_item !== data.id))
+      return
+    }
+    if (event.type === "edge.add" && data?.edge) {
+      const incoming = data.edge as BoardEdge
+      setEdges((prev) => (prev.some((e) => e.id === incoming.id) ? prev : [...prev, incoming]))
+      return
+    }
+    if (event.type === "edge.remove" && data?.id) {
+      setEdges((prev) => prev.filter((e) => e.id !== data.id))
+    }
+  }, [])
+
+  const live = useLive(boardId, me.id, onLive)
+  const liveRef = useRef(live)
+  liveRef.current = live
+
+  // Tell teammates which card has this person's caret in it.
+  useEffect(() => {
+    live.send("editing", { itemId: editing })
+  }, [editing, live])
+
+  // Stream the pointer in board coordinates so it lands in the same spot
+  // for everyone regardless of their own pan and zoom.
+  useEffect(() => {
+    const node = wrap.current
+    if (!node) return
+    const onMove = (e: PointerEvent) => {
+      const box = node.getBoundingClientRect()
+      const z = zoomRef.current || 1
+      liveRef.current.sendCursor(
+        (e.clientX - box.left - panRef.current.x) / z,
+        (e.clientY - box.top - panRef.current.y) / z,
+      )
+    }
+    node.addEventListener("pointermove", onMove)
+    return () => node.removeEventListener("pointermove", onMove)
+  }, [])
   marqueeGhostRef.current = ghost ? { x: ghost.x, y: ghost.y, w: ghost.w, h: ghost.h } : null
   const past = useRef<Step[]>([])
   const future = useRef<Step[]>([])
@@ -536,6 +596,7 @@ export default function Canvas({
       body: JSON.stringify({ id, ...patch }),
     })
     if (!res.ok) setToast("Could not save that change")
+    else liveRef.current?.send("item.upsert", { id, patch })
   }, [])
 
   const updateLocal = useCallback((id: string, patch: Partial<BoardItem>) => {
@@ -600,6 +661,7 @@ export default function Canvas({
       const item = data.item as BoardItem
       setItems((prev) => [...prev, item])
       setSelected(item.id)
+      liveRef.current?.send("item.upsert", { item })
       return item
     },
     [boardId],
@@ -610,6 +672,7 @@ export default function Canvas({
     setEdges((prev) => prev.filter((e) => e.from_item !== id && e.to_item !== id))
     setSelected((prev) => (prev === id ? null : prev))
     setEditing((prev) => (prev === id ? null : prev))
+    liveRef.current?.send("item.remove", { id })
   }, [])
 
   /** Create an item and remember it so Undo can take it back. */
@@ -807,6 +870,7 @@ export default function Canvas({
         return
       }
       setEdges((prev) => prev.map((e) => (e.id === temp.id ? (data.edge as BoardEdge) : e)))
+      liveRef.current?.send("edge.add", { edge: data.edge })
     },
     [boardId, edges, me.id],
   )
@@ -814,6 +878,7 @@ export default function Canvas({
   async function removeEdge(id: string) {
     setEdges((prev) => prev.filter((e) => e.id !== id))
     setHoverEdge(null)
+    liveRef.current?.send("edge.remove", { id })
     await apiFetch("/api/edges?id=" + id, { method: "DELETE" })
   }
 
@@ -1333,6 +1398,38 @@ export default function Canvas({
         className="canvas-layer"
         style={{ transform: "translate(" + pan.x + "px," + pan.y + "px) scale(" + zoom + ")" }}
       >
+        {live.cursors.map((c) => (
+          <div
+            key={c.userId}
+            className="live-cursor"
+            style={{ transform: "translate(" + c.x + "px," + c.y + "px)" }}
+          >
+            <svg viewBox="0 0 16 16" width="16" height="16">
+              <path d="M2 1.5 L12.5 8 L7.6 8.6 L5.4 13 Z" fill={colorOf(c.userId)} stroke="#fff" strokeWidth="1" strokeLinejoin="round" />
+            </svg>
+            <span className="live-name" style={{ background: colorOf(c.userId) }}>
+              {nameOf(c.userId)}
+            </span>
+          </div>
+        ))}
+        {live.peers
+          .filter((p) => p.editing && p.userId !== me.id)
+          .map((p) => {
+            const target = items.find((i) => i.id === p.editing)
+            if (!target) return null
+            return (
+              <div
+                key={"edit-" + p.userId}
+                className="live-editing"
+                style={{
+                  transform: "translate(" + target.x + "px," + (target.y - 26) + "px)",
+                  background: colorOf(p.userId),
+                }}
+              >
+                {nameOf(p.userId)} is editing
+              </div>
+            )
+          })}
         <svg className="canvas-svg" overflow="visible">
           <defs>
             {users.map((u) => (
