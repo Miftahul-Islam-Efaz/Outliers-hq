@@ -40,6 +40,8 @@ export default function NotesBoard({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Note | null>(null)
+  const [organizing, setOrganizing] = useState(false)
+  const [organized, setOrganized] = useState(false)
 
   const [query, setQuery] = useState("")
   const [cat, setCat] = useState<string | null>(null)
@@ -92,6 +94,38 @@ export default function NotesBoard({
     const data = await res.json().catch(() => ({}))
     setLoadingPreview(false)
     setPreview(data?.preview || null)
+  }
+
+  // Sends the rough idea to Mistral and fills the composer with a tidy
+  // title, description, category and tags.
+  async function organize() {
+    if (description.trim().length < 12) {
+      setError("Write a little more of the idea first, then organise it.")
+      return
+    }
+    setOrganizing(true)
+    setError(null)
+    try {
+      const res = await apiFetch("/api/organize", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text: description, title }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(data?.error || "Could not organise the idea")
+        return
+      }
+      const r = data.result || {}
+      if (r.title) setTitle(r.title)
+      if (r.description) setDescription(r.description)
+      if (r.category && !category.trim()) setCategory(r.category)
+      if (Array.isArray(r.tags) && r.tags.length && !tags.trim()) setTags(r.tags.join(", "))
+      setOrganized(true)
+      setTimeout(() => setOrganized(false), 2400)
+    } finally {
+      setOrganizing(false)
+    }
   }
 
   async function save() {
@@ -234,6 +268,15 @@ export default function NotesBoard({
           ) : null}
 
           <div className="composer-row" style={{ marginTop: 14 }}>
+            <button
+              className={"btn btn-ai" + (organizing ? " busy" : "") + (organized ? " done" : "")}
+              onClick={organize}
+              disabled={organizing || saving}
+              title="Let Mistral tidy the title, description, category and tags"
+            >
+              <span className="ai-spark" aria-hidden="true" />
+              {organizing ? "Organising\u2026" : organized ? "Organised" : "Organise with AI"}
+            </button>
             <button className="btn btn-accent" onClick={save} disabled={saving}>
               {saving ? "Saving…" : "Save idea"}
             </button>

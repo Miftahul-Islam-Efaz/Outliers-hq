@@ -8,6 +8,7 @@ import type { User } from "@/lib/db"
 import { initials } from "@/lib/links"
 import { IconBoard, IconLogout, IconNotes } from "./Icons"
 import ProfileModal from "./ProfileModal"
+import StorageMeter from "./StorageMeter"
 
 export default function Shell({
   user,
@@ -64,6 +65,7 @@ export default function Shell({
             {onBoards ? "Whiteboards" : "Notes"}
           </div>
           <div style={{ flex: 1 }} />
+          <StorageMeter />
           <button
             className="author as-button"
             title="Edit your profile"
