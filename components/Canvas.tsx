@@ -479,6 +479,7 @@ export default function Canvas({
   const future = useRef<Step[]>([])
 
   const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
+  const [panelOpen, setPanelOpen] = useState(true)
   const roster = useMemo(
     () => [
       { userId: me.id, editing: editing },
@@ -1258,7 +1259,8 @@ export default function Canvas({
       const item = itemsRef.current.find((i) => i.id === d.id)
       if (item && d.kind === "move" && !d.moved) {
         // A single click on a card opens its inputs, Milanote style.
-        if (item.kind !== "image") startEdit(item)
+        // Ink and images hold no text, so a click only selects them.
+        if (item.kind !== "image" && item.shape !== "freehand") startEdit(item)
       } else if (item) {
         // Overlap is allowed on purpose: a card is dropped exactly where it
         // was released, so text can sit on top of anything.
@@ -1651,7 +1653,7 @@ export default function Canvas({
               onDoubleClick={(e) => {
                 e.stopPropagation()
                 setSelected(item.id)
-                startEdit(item)
+                if (item.shape !== "freehand") startEdit(item)
               }}
             >
               {isShape ? (
@@ -1839,9 +1841,11 @@ export default function Canvas({
                   onPointerUp={(e) => e.stopPropagation()}
                   onDoubleClick={(e) => e.stopPropagation()}
                 >
-                  <button className="bar-btn" title="Edit text" onClick={() => startEdit(item)}>
-                    <IconText size={15} />
-                  </button>
+                  {item.shape !== "freehand" ? (
+                    <button className="bar-btn" title="Edit text" onClick={() => startEdit(item)}>
+                      <IconText size={15} />
+                    </button>
+                  ) : null}
                   <button className="bar-btn" title="Connect to another card" onClick={() => startWire(item)}>
                     <IconConnect size={15} />
                   </button>
@@ -1976,43 +1980,96 @@ export default function Canvas({
         </div>
       ) : null}
 
-      {/* Who is on this board right now, straight from presence. */}
-      <aside className="live-roster" onPointerDown={(e) => e.stopPropagation()}>
-        <div className="live-roster-head">
-          <span
-            className={"live-roster-dot" + (live.online ? " on" : "")}
-          />
-          <span className="live-roster-title">
-            {live.online ? "Live now" : "Offline"}
-          </span>
-          <span className="live-roster-count">{roster.length}</span>
-        </div>
-        <div className="live-roster-list">
-          {roster.map((entry) => (
-            <div className="live-roster-row" key={entry.userId}>
-              <span className="avatar sm" style={{ background: colorOf(entry.userId) }}>
-                {initials(nameOf(entry.userId))}
-              </span>
-              <span className="live-roster-name">
-                {entry.userId === me.id ? "You" : nameOf(entry.userId)}
-              </span>
-              {entry.editing ? <span className="live-roster-tag">editing</span> : null}
-            </div>
-          ))}
-          {roster.length < 2 ? (
-            <div className="live-roster-empty">
-              {live.online
-                ? "Nobody else is here yet."
-                : "Reconnecting to the live board..."}
-            </div>
-          ) : null}
-        </div>
+      {/* One left panel: presence, connection and board info together. */}
+      <aside
+        className={"board-panel" + (panelOpen ? "" : " collapsed")}
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="board-panel-toggle"
+          onClick={() => setPanelOpen((v) => !v)}
+          title={panelOpen ? "Collapse panel" : "Expand panel"}
+          aria-expanded={panelOpen}
+        >
+          <span className={"board-panel-dot" + (live.online ? " on" : "")} />
+          {panelOpen ? <span className="board-panel-heading">Board</span> : null}
+          <span className="board-panel-chev">{panelOpen ? "«" : "»"}</span>
+        </button>
+
+        {panelOpen ? (
+          <div className="board-panel-body">
+            <section className="board-panel-section">
+              <div className="board-panel-label">
+                <span>{live.online ? "Live now" : "Offline"}</span>
+                <span className="board-panel-count">{roster.length}</span>
+              </div>
+              {roster.map((entry) => (
+                <div className="board-panel-person" key={entry.userId}>
+                  <span className="avatar sm" style={{ background: colorOf(entry.userId) }}>
+                    {initials(nameOf(entry.userId))}
+                  </span>
+                  <span className="board-panel-name">
+                    {entry.userId === me.id ? "You" : nameOf(entry.userId)}
+                  </span>
+                  {entry.editing ? <span className="board-panel-tag">editing</span> : null}
+                </div>
+              ))}
+              {roster.length < 2 ? (
+                <p className="board-panel-hint">Nobody else is here yet.</p>
+              ) : null}
+            </section>
+
+            {/* Connection state only takes space when something is wrong. */}
+            {!live.online ? (
+              <section className="board-panel-section">
+                <button
+                  type="button"
+                  className="board-panel-retry"
+                  onClick={() => live.retry()}
+                  title={live.detail || "Live connection"}
+                >
+                  {live.status === "connecting"
+                    ? "Connecting…"
+                    : live.status === "config-failed"
+                      ? "Offline · " + (live.detail || "settings unavailable") + " · retry"
+                      : live.status === "channel-error"
+                        ? "Offline · " + (live.detail || "channel refused") + " · retry"
+                        : live.status === "timed-out"
+                          ? "Offline · timed out · retry"
+                          : "Offline · tap to reconnect"}
+                </button>
+              </section>
+            ) : null}
+
+            <section className="board-panel-section">
+              <div className="board-panel-label">
+                <span>Board</span>
+              </div>
+              <div className="board-panel-stats">
+                <span>{items.length} {items.length === 1 ? "card" : "cards"}</span>
+                <span>{Math.round(zoom * 100)}%</span>
+              </div>
+              {picked.length > 1 ? (
+                <button
+                  type="button"
+                  className="board-panel-danger"
+                  onClick={() => {
+                    picked.forEach((id) => removeItem(id))
+                    setPicked([])
+                  }}
+                >
+                  Delete {picked.length} selected
+                </button>
+              ) : null}
+            </section>
+
+            <p className="board-panel-tip">Drag to select · Ctrl + scroll to zoom</p>
+          </div>
+        ) : null}
       </aside>
 
       <div className="canvas-hud">
-        <div className="hud-card">
-          {items.length} {items.length === 1 ? "card" : "cards"}
-        </div>
         {wire ? (
           <div className="linking-note">
             Drop on a card to connect — or click the target card. Esc cancels
@@ -2097,41 +2154,6 @@ export default function Canvas({
         {tool !== "select" && tool !== "pen" ? (
           <div className="place-tip">Click, or drag out the size you want</div>
         ) : null}
-        {picked.length > 1 ? (
-          <button
-            className="hud-card danger"
-            onClick={() => {
-              picked.forEach((id) => removeItem(id))
-              setPicked([])
-            }}
-          >
-            Delete {picked.length} selected
-          </button>
-        ) : null}
-        {!selected && picked.length === 0 && tool === "select" && !wire ? (
-          <div className="hud-card ghost">Drag to select · Ctrl + scroll to zoom</div>
-        ) : null}
-        <button
-          type="button"
-          className={"live-status" + (live.online ? " on" : "") + (live.status === "connecting" ? "" : live.online ? "" : " bad")}
-          onClick={() => live.retry()}
-          title={live.detail || "Live connection"}
-        >
-          <span className="live-status-dot" />
-          {live.online
-            ? live.peers.length > 1
-              ? live.peers.length + " people on this board"
-              : "Live · you are the only one here"
-            : live.status === "connecting"
-              ? "Connecting to live board…"
-              : live.status === "config-failed"
-                ? "Live off · " + (live.detail || "could not read realtime settings") + " · tap to retry"
-                : live.status === "channel-error"
-                  ? "Live off · " + (live.detail || "channel refused") + " · tap to retry"
-                  : live.status === "timed-out"
-                    ? "Live off · connection timed out · tap to retry"
-                    : "Live off · tap to reconnect"}
-        </button>
         {toast ? (
           <div className="board-toast" role="status">
             <span className="board-toast-dot" />
@@ -2386,25 +2408,6 @@ export default function Canvas({
 
         <span className="dock-sep" />
 
-        <button
-          className={"dock-btn" + (wire ? " accent on" : "")}
-          onClick={() => {
-            if (wire) {
-              setWire(null)
-              return
-            }
-            const item = selected ? itemById.get(selected) : null
-            if (item) {
-              startWire(item)
-              return
-            }
-            setToast("Select a card first, or use its Connect button")
-          }}
-        >
-          <IconConnect />
-          <span>Connect</span>
-        </button>
-
         <button className="dock-btn" title="Space out overlapping cards" onClick={tidyBoard}>
           <IconTarget />
           <span>Tidy</span>
@@ -2456,9 +2459,6 @@ export default function Canvas({
             onClick={() => zoomTo(zoom * 1.15)}
           >
             <IconPlus />
-          </button>
-          <button className="dock-btn sm" title="Fit everything on screen" onClick={zoomToFit}>
-            <IconTarget />
           </button>
         </div>
       </div>

@@ -2215,3 +2215,185 @@ textarea {
   line-height: 1.35;
   color: #8d8a84;
 }
+
+/* ---- Left side panel: one home for presence, connection and board info ---- */
+.board-panel {
+  position: absolute;
+  left: 14px;
+  top: 14px;
+  z-index: 38;
+  width: 196px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(17, 17, 16, 0.09);
+  box-shadow: 0 8px 26px rgba(17, 17, 16, 0.09);
+  backdrop-filter: blur(10px);
+  overflow: hidden;
+  transition: width 140ms ease;
+}
+
+.board-panel.collapsed {
+  width: 46px;
+}
+
+.board-panel-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 10px 11px;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.board-panel-toggle:hover {
+  background: rgba(17, 17, 16, 0.035);
+}
+
+.board-panel-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #b6b2aa;
+  flex: none;
+}
+
+.board-panel-dot.on {
+  background: #35a06a;
+  box-shadow: 0 0 0 3px rgba(53, 160, 106, 0.16);
+}
+
+.board-panel-heading {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #6f6b64;
+}
+
+.board-panel-chev {
+  margin-left: auto;
+  font-size: 12px;
+  line-height: 1;
+  color: #9c9890;
+}
+
+.board-panel-body {
+  padding: 0 11px 11px;
+}
+
+.board-panel-section {
+  padding-top: 9px;
+  margin-top: 9px;
+  border-top: 1px solid rgba(17, 17, 16, 0.07);
+}
+
+.board-panel-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.board-panel-label {
+  display: flex;
+  align-items: center;
+  margin-bottom: 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #8d8a84;
+}
+
+.board-panel-count {
+  margin-left: auto;
+  color: #6f6b64;
+}
+
+.board-panel-person {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  margin-bottom: 6px;
+}
+
+.board-panel-person:last-child {
+  margin-bottom: 0;
+}
+
+.board-panel-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #23281f;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-panel-tag {
+  margin-left: auto;
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #8a6d1f;
+  background: rgba(242, 194, 48, 0.24);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.board-panel-hint,
+.board-panel-tip {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #8d8a84;
+}
+
+.board-panel-tip {
+  margin-top: 9px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(17, 17, 16, 0.07);
+}
+
+.board-panel-stats {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #23281f;
+}
+
+.board-panel-retry {
+  width: 100%;
+  padding: 7px 9px;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  color: #8a3a32;
+  background: rgba(211, 63, 52, 0.09);
+  border: 1px solid rgba(211, 63, 52, 0.2);
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.board-panel-retry:hover {
+  background: rgba(211, 63, 52, 0.14);
+}
+
+.board-panel-danger {
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: #d33f34;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
