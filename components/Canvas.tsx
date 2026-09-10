@@ -58,6 +58,8 @@ type Drag =
       startY: number
       w: number
       h: number
+      /** width / height, set for pictures so resizing cannot distort them. */
+      ratio?: number
       moved?: boolean
     }
   | null
@@ -646,6 +648,10 @@ export default function Canvas({
     const node = wrap.current
     if (!node) return
     function onWheel(e: WheelEvent) {
+      // Scrolling inside the side panel or tool rail belongs to that element,
+      // not to the board underneath it.
+      const over = e.target as HTMLElement | null
+      if (over && over.closest(".board-panel, .canvas-dock")) return
       e.preventDefault()
       // Ctrl / Cmd + scroll zooms at the cursor. A plain scroll pans the board.
       if (e.ctrlKey || e.metaKey) {
@@ -1272,10 +1278,10 @@ export default function Canvas({
         streamMove([{ id: d.id, patch }])
       }
     } else {
-      const patch = {
-        width: Math.max(120, Math.round(d.w + dx)),
-        height: Math.max(56, Math.round(d.h + dy)),
-      }
+      const width = Math.max(120, Math.round(d.w + dx))
+      const patch = d.ratio
+        ? { width, height: Math.max(56, Math.round(width / d.ratio)) }
+        : { width, height: Math.max(56, Math.round(d.h + dy)) }
       updateLocal(d.id, patch)
       streamMove([{ id: d.id, patch }])
     }
@@ -1873,7 +1879,8 @@ export default function Canvas({
                     <img
                       className={"item-thumb" + (item.kind === "image" ? " full" : "")}
                       src={item.link_thumbnail}
-                      alt=""
+                      title={item.link_url || item.link_thumbnail || undefined}
+                      alt={item.title || ""}
                     />
                   ) : null}
                   {item.link_url && item.kind !== "image" ? (
@@ -1946,6 +1953,21 @@ export default function Canvas({
                   <button className="bar-btn" title="Connect to another card" onClick={() => startWire(item)}>
                     <IconConnect size={15} />
                   </button>
+                  {item.link_url || item.link_thumbnail ? (
+                    <button
+                      className="bar-btn"
+                      title={"Copy link: " + (item.link_url || item.link_thumbnail)}
+                      onClick={() => {
+                        const address = item.link_url || item.link_thumbnail || ""
+                        navigator.clipboard
+                          ?.writeText(address)
+                          .then(() => setToast("Link copied"))
+                          .catch(() => setToast("Could not copy that link"))
+                      }}
+                    >
+                      <IconLink size={15} />
+                    </button>
+                  ) : null}
                   <button className="bar-btn" title="Duplicate" onClick={() => duplicate(item)}>
                     <IconDuplicate size={15} />
                   </button>
@@ -1967,6 +1989,11 @@ export default function Canvas({
                     startY: e.clientY,
                     w: item.width,
                     h: item.height,
+                    // Pictures keep their shape; text cards stay free-form.
+                    ratio:
+                      item.kind === "image" || item.link_thumbnail
+                        ? item.width / Math.max(1, item.height)
+                        : undefined,
                   }
                 }}
               />

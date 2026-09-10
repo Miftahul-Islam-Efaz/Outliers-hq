@@ -2650,3 +2650,23 @@ textarea {
   flex-direction: column;
   z-index: 60;
 }
+
+/* ---- Resizable previews ---- */
+
+/* The 200px cap pinned link previews to one size. Let the thumbnail fill
+   whatever box the card has been resized to, still without distorting. */
+.item-thumb {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.item.link .item-inner,
+.item .item-inner {
+  min-height: 0;
+}
+
+/* Chat needs its own scroll surface so the wheel never reaches the board. */
+.chat-log {
+  overscroll-behavior: contain;
+}
