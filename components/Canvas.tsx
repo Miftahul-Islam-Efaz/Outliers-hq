@@ -455,8 +455,8 @@ export default function Canvas({
 
   // Tell teammates which card has this person's caret in it.
   useEffect(() => {
-    live.send("editing", { itemId: editing })
-  }, [editing, live])
+    liveRef.current.send("editing", { itemId: editing })
+  }, [editing])
 
   // Stream the pointer in board coordinates so it lands in the same spot
   // for everyone regardless of their own pan and zoom.

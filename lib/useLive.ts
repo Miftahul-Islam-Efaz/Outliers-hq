@@ -155,7 +155,12 @@ export function useLive(
           }
         }
         const next = [...seen.values()]
-        setPeers(next)
+        setPeers((prev) => {
+          const same =
+            prev.length === next.length &&
+            prev.every((p, i) => p.userId === next[i].userId && p.editing === next[i].editing)
+          return same ? prev : next
+        })
 
         // Deliberately NOT pruning cursors here. A cursor is only refreshed
         // when that person moves their mouse, so dropping it on a presence
@@ -313,6 +318,10 @@ export function useLive(
       // "editing" also updates presence so a late joiner sees the badge.
       if (type === "editing") {
         const itemId = (payload as { itemId?: string | null } | undefined)?.itemId ?? null
+        // Bail if nothing changed. Re-tracking presence on every render sent a
+        // continuous stream of presence updates, which tripped the rate limit
+        // and made the channel drop and rejoin about once a second.
+        if (editingRef.current === itemId) return
         editingRef.current = itemId
         void channel.track({ userId: meId, editing: itemId })
       }
@@ -388,5 +397,22 @@ export function useLive(
     setAttempt((n) => n + 1)
   }, [])
 
-  return { peers, cursorIds, cursorsRef, online, status, detail, retry, send, sendCursor, editingBy, clientId }
+  // A fresh object literal here re-triggered every caller effect that depends
+  // on `live`, which is what drove the connect/disconnect cycle.
+  return useMemo(
+    () => ({
+      peers,
+      cursorIds,
+      cursorsRef,
+      online,
+      status,
+      detail,
+      retry,
+      send,
+      sendCursor,
+      editingBy,
+      clientId,
+    }),
+    [peers, cursorIds, online, status, detail, retry, send, sendCursor, editingBy, clientId],
+  )
 }
