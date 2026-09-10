@@ -169,7 +169,11 @@ export function useLive(
       }
 
       channel.on("presence", { event: "sync" }, syncPresence)
-      channel.on("presence", { event: "join" }, syncPresence)
+      channel.on("presence", { event: "join" }, () => {
+        syncPresence()
+        const live = channelRef.current
+        if (live) void live.track({ userId: meId, editing: editingRef.current })
+      })
       channel.on("presence", { event: "leave" }, syncPresence)
 
       channel.on("broadcast", { event: "cursor" }, ({ payload }) => {

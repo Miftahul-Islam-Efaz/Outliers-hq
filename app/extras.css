@@ -2670,3 +2670,72 @@ textarea {
 .chat-log {
   overscroll-behavior: contain;
 }
+
+/* ---- Contain previews, clearer collapse ---- */
+
+/* .item is overflow:visible so the hover bar can sit outside the card, which
+   also let pictures spill past the edge. Size the image to the card box
+   instead of clipping, so it shrinks and grows with the card. */
+.item-thumb {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  align-self: stretch;
+}
+
+.item.image .item-thumb.full,
+.item-thumb.full {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 14px;
+}
+
+/* Pictures should clip to their own rounded box; the hover bar lives in a
+   separate stacking context above, so it stays visible. */
+.item.image {
+  overflow: hidden;
+}
+
+.item.image .item-bar {
+  z-index: 70;
+}
+
+/* The collapse control read as decoration. Give it a real button shape. */
+.board-panel-toggle {
+  border-bottom: 1px solid rgba(17, 17, 16, 0.07);
+}
+
+.board-panel-chev {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid rgba(17, 17, 16, 0.14);
+  background: #fff;
+  color: #4a4740;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.board-panel-toggle:hover .board-panel-chev {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+/* Collapsed, the whole strip should look tappable. */
+.board-panel.collapsed .board-panel-toggle {
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 6px;
+  border-bottom: 0;
+}

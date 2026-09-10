@@ -497,13 +497,18 @@ export default function Canvas({
   const [draft, setDraft] = useState("")
   const [sending, setSending] = useState(false)
   const chatEndRef = useRef<HTMLDivElement | null>(null)
-  const roster = useMemo(
-    () => [
-      { userId: me.id, editing: editing },
-      ...live.peers.filter((p) => p.userId !== me.id),
-    ],
-    [live.peers, me.id, editing],
-  )
+  const roster = useMemo(() => {
+    const seen = new Map<string, { userId: string; editing: string | null }>()
+    seen.set(me.id, { userId: me.id, editing })
+    for (const peer of live.peers) {
+      if (peer.userId !== me.id) seen.set(peer.userId, peer)
+    }
+    // Someone whose cursor is live is on the board, whatever presence says.
+    for (const id of live.cursorIds) {
+      if (id !== me.id && !seen.has(id)) seen.set(id, { userId: id, editing: null })
+    }
+    return [...seen.values()]
+  }, [live.peers, live.cursorIds, me.id, editing])
   // Fetch recent history once per board. The route also purges >24h rows.
   useEffect(() => {
     let cancelled = false
