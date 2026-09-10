@@ -52,10 +52,37 @@ export function normalizeUrl(raw: string): URL | null {
   }
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(?:[?#]|$)/i
+
+/** Is this link the image itself, rather than a page containing one? */
+async function directImage(u: URL): Promise<boolean> {
+  if (IMAGE_EXT.test(u.pathname)) return true
+  try {
+    const res = await fetch(u.toString(), {
+      method: "HEAD",
+      signal: AbortSignal.timeout(6000),
+    })
+    return (res.headers.get("content-type") || "").startsWith("image/")
+  } catch {
+    return false
+  }
+}
+
 export async function buildPreview(raw: string): Promise<LinkPreview | null> {
   const u = normalizeUrl(raw)
   if (!u) return null
   const host = u.hostname.replace(/^www\./, "")
+
+  // A link straight to a .jpg/.png is its own thumbnail.
+  if (await directImage(u)) {
+    return {
+      provider: "image",
+      url: u.toString(),
+      title: decodeURIComponent(u.pathname.split("/").pop() || "") || u.hostname,
+      thumbnail: u.toString(),
+      embedUrl: null,
+    }
+  }
 
   if (host.includes("youtube.com") || host.includes("youtu.be")) {
     const id = youtubeId(u)
@@ -105,8 +132,11 @@ async function fetchHtml(u: URL): Promise<string | null> {
   try {
     const res = await fetch(u.toString(), {
       headers: {
-        "user-agent": "Mozilla/5.0 (compatible; OutliersHqBot/1.0)",
-        accept: "text/html,*/*",
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+          "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        accept: "text/html,application/xhtml+xml,*/*",
+        "accept-language": "en-US,en;q=0.9",
       },
       cache: "no-store",
       signal: AbortSignal.timeout(8000),
@@ -131,15 +161,32 @@ async function fetchTitle(u: URL): Promise<string | null> {
 async function fetchMeta(u: URL): Promise<{ title: string | null; thumbnail: string | null }> {
   const html = await fetchHtml(u)
   if (!html) return { title: null, thumbnail: null }
+  const raw =
+    decode(metaTag(html, "og:image")) ||
+    decode(metaTag(html, "og:image:secure_url")) ||
+    decode(metaTag(html, "og:image:url")) ||
+    decode(metaTag(html, "twitter:image")) ||
+    decode(metaTag(html, "twitter:image:src")) ||
+    // Last resort: a link-rel icon or the first sizeable <img> on the page.
+    decode(html.match(/<link[^>]+rel=["'](?:image_src|apple-touch-icon)["'][^>]+href=["']([^"']+)["']/i)?.[1]) ||
+    decode(html.match(/<img[^>]+src=["']([^"']+\.(?:png|jpe?g|webp|avif)[^"']*)["']/i)?.[1])
+
+  let thumbnail: string | null = null
+  if (raw) {
+    try {
+      // Handles "/img/x.png" and "//cdn/x.png" as well as absolute URLs.
+      thumbnail = new URL(raw, u).toString()
+    } catch {
+      thumbnail = null
+    }
+  }
+
   return {
     title:
       decode(metaTag(html, "og:title")) ||
       decode(metaTag(html, "twitter:title")) ||
       decode(html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]),
-    thumbnail:
-      decode(metaTag(html, "og:image")) ||
-      decode(metaTag(html, "og:image:secure_url")) ||
-      decode(metaTag(html, "twitter:image")),
+    thumbnail,
   }
 }
 

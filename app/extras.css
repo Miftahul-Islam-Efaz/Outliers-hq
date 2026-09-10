@@ -853,7 +853,21 @@
   stroke-dasharray: 4 3;
   vector-effect: non-scaling-stroke;
 }
-.item.picked { box-shadow: 0 0 0 2px var(--accent), var(--shadow-soft); }
+/* Marquee selection needs to read at a glance across many cards. */
+.item.picked {
+  box-shadow: 0 0 0 2px var(--accent), var(--shadow-soft);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.item.picked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  opacity: 0.10;
+  pointer-events: none;
+  border-radius: inherit;
+}
 
 /* note card: a plain text box you click into and type */
 .note-input {

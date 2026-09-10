@@ -76,6 +76,8 @@ export function useLive(
 
   const channelRef = useRef<RealtimeChannel | null>(null)
   const readyRef = useRef(false)
+  /** Events raised before the socket finished connecting. */
+  const queued = useRef<Array<{ type: LiveKind; payload?: unknown }>>([])
   const editingRef = useRef<string | null>(null)
   const pending = useRef<{ x: number; y: number } | null>(null)
   const frame = useRef<number | null>(null)
@@ -166,6 +168,15 @@ export function useLive(
         setOnline(connected)
         if (connected && channel) {
           void channel.track({ userId: meId, editing: editingRef.current })
+          const backlog = queued.current
+          queued.current = []
+          for (const entry of backlog) {
+            void channel.send({
+              type: "broadcast",
+              event: "live",
+              payload: { type: entry.type, senderId: meId, clientId, payload: entry.payload },
+            })
+          }
         }
       })
     })
@@ -203,7 +214,14 @@ export function useLive(
   const send = useCallback(
     (type: LiveKind, payload?: unknown) => {
       const channel = channelRef.current
-      if (!channel || !readyRef.current) return
+      if (!channel || !readyRef.current) {
+        // Still connecting: hold the change instead of dropping it. Cursors
+        // and heartbeats are worthless once stale, so they are not queued.
+        if (type !== "cursor" && type !== "ping" && queued.current.length < 50) {
+          queued.current.push({ type, payload })
+        }
+        return
+      }
 
       // "editing" also updates presence so a late joiner sees the badge.
       if (type === "editing") {

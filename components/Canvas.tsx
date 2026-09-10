@@ -1117,6 +1117,18 @@ export default function Canvas({
       const from = toBoard(d.startX, d.startY)
       const to = toBoard(e.clientX, e.clientY)
       setMarquee({ x1: from.x, y1: from.y, x2: to.x, y2: to.y })
+      // Live feedback: everything the box currently covers lights up as you
+      // drag, instead of only highlighting once the mouse is released.
+      const left = Math.min(from.x, to.x)
+      const right = Math.max(from.x, to.x)
+      const top = Math.min(from.y, to.y)
+      const bottom = Math.max(from.y, to.y)
+      const inside = itemsRef.current
+        .filter((i) => i.x < right && i.x + i.width > left && i.y < bottom && i.y + i.height > top)
+        .map((i) => i.id)
+      setPicked((prev) =>
+        prev.length === inside.length && prev.every((id, n) => id === inside[n]) ? prev : inside,
+      )
       return
     }
     const dx = (e.clientX - d.startX) / zoomRef.current
@@ -1193,10 +1205,20 @@ export default function Canvas({
       const group = groupRef.current
       groupRef.current = null
       if (d.kind === "move" && d.moved && group && group.length > 1) {
+        const after: Array<{ id: string; x: number; y: number }> = []
         for (const g of group) {
           const moved = itemsRef.current.find((i) => i.id === g.id)
-          if (moved) await patchItem(moved.id, { x: moved.x, y: moved.y })
+          if (moved) {
+            after.push({ id: moved.id, x: moved.x, y: moved.y })
+            await patchItem(moved.id, { x: moved.x, y: moved.y })
+          }
         }
+        // One step for the whole group, so undo puts them all back at once.
+        const before = group.map((g) => ({ id: g.id, x: g.x, y: g.y }))
+        const place = (list: Array<{ id: string; x: number; y: number }>) => {
+          for (const entry of list) applyPatch(entry.id, { x: entry.x, y: entry.y })
+        }
+        pushStep({ undo: () => place(before), redo: () => place(after) })
         if (wireRef.current?.moved) setWire(null)
         return
       }
@@ -1207,13 +1229,11 @@ export default function Canvas({
         // A single click on a card opens its inputs, Milanote style.
         if (item.kind !== "image") startEdit(item)
       } else if (item) {
-        const spot = resolve(
-          { x: item.x, y: item.y, width: item.width, height: item.height },
-          item.id,
-        )
+        // Overlap is allowed on purpose: a card is dropped exactly where it
+        // was released, so text can sit on top of anything.
         const next = {
-          x: Math.round(spot.x),
-          y: Math.round(spot.y),
+          x: Math.round(item.x),
+          y: Math.round(item.y),
           width: item.width,
           height: item.height,
         }
@@ -1559,6 +1579,9 @@ export default function Canvas({
                 top: item.y,
                 width: item.width,
                 height: item.height,
+                // Text floats above other cards, and whatever you are working
+                // on floats above everything, so overlapping stays usable.
+                zIndex: isEditing ? 40 : isSelected ? 30 : isText ? 20 : 1,
                 ...((isPlain || item.kind === "sticky") && style.fill
                   ? { background: style.fill }
                   : {}),
