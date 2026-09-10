@@ -479,6 +479,13 @@ export default function Canvas({
   const future = useRef<Step[]>([])
 
   const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
+  const roster = useMemo(
+    () => [
+      { userId: me.id, editing: editing },
+      ...live.peers.filter((p) => p.userId !== me.id),
+    ],
+    [live.peers, me.id, editing],
+  )
   const colorOf = (id: string) => userMap.get(id)?.color || "#8d8a84"
   const nameOf = (id: string) => userMap.get(id)?.display_name || "Another member"
   const ownedByMe = (item: { created_by: string }) => item.created_by === me.id
@@ -1968,6 +1975,39 @@ export default function Canvas({
           />
         </div>
       ) : null}
+
+      {/* Who is on this board right now, straight from presence. */}
+      <aside className="live-roster" onPointerDown={(e) => e.stopPropagation()}>
+        <div className="live-roster-head">
+          <span
+            className={"live-roster-dot" + (live.online ? " on" : "")}
+          />
+          <span className="live-roster-title">
+            {live.online ? "Live now" : "Offline"}
+          </span>
+          <span className="live-roster-count">{roster.length}</span>
+        </div>
+        <div className="live-roster-list">
+          {roster.map((entry) => (
+            <div className="live-roster-row" key={entry.userId}>
+              <span className="avatar sm" style={{ background: colorOf(entry.userId) }}>
+                {initials(nameOf(entry.userId))}
+              </span>
+              <span className="live-roster-name">
+                {entry.userId === me.id ? "You" : nameOf(entry.userId)}
+              </span>
+              {entry.editing ? <span className="live-roster-tag">editing</span> : null}
+            </div>
+          ))}
+          {roster.length < 2 ? (
+            <div className="live-roster-empty">
+              {live.online
+                ? "Nobody else is here yet."
+                : "Reconnecting to the live board..."}
+            </div>
+          ) : null}
+        </div>
+      </aside>
 
       <div className="canvas-hud">
         <div className="hud-card">
