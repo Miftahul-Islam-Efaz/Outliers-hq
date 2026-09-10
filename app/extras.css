@@ -1944,7 +1944,10 @@ textarea {
 
 .ai-run:hover:not(:disabled) { filter: brightness(1.07); }
 .ai-run:disabled { cursor: default; }
-.ai-run.busy { animation: aiPulse 1.4s ease-in-out infinite; }
+/* aiPulse rotates and scales, so it belongs on the diamond only. Applied to
+   the whole button it spun the entire control on click. */
+.ai-run.busy .ai-diamond { animation: aiPulse 1.4s ease-in-out infinite; }
+.ai-run.busy { opacity: 0.85; }
 
 .ai-diamond {
   width: 8px;
