@@ -2108,3 +2108,21 @@ textarea {
   padding: 3px 8px;
   border: 1px solid rgba(35, 40, 31, 0.3);
 }
+
+/* Ink now sits ABOVE cards, so its mostly-empty bounding box must not
+   swallow clicks meant for the card underneath. Only the drawn line itself,
+   plus its own handles, stay interactive. The erasing rule above re-enables
+   pointer events on .item, so it keeps working. */
+.item.freehand {
+  pointer-events: none;
+}
+
+.item.freehand .shape-svg path {
+  pointer-events: stroke;
+}
+
+.item.freehand.selected,
+.item.freehand .item-handle,
+.item.freehand .item-bar {
+  pointer-events: auto;
+}

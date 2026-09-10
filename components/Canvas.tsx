@@ -591,13 +591,29 @@ export default function Canvas({
   }, [zoomTo])
 
   const patchItem = useCallback(async (id: string, patch: Record<string, unknown>) => {
+    // Send first: the broadcast is instant, the save is not.
+    liveRef.current?.send("item.upsert", { id, patch })
     const res = await apiFetch("/api/items", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id, ...patch }),
     })
     if (!res.ok) setToast("Could not save that change")
-    else liveRef.current?.send("item.upsert", { id, patch })
+  }, [])
+
+  /**
+   * Broadcast-only position updates, throttled to roughly one per frame.
+   * These never hit the database - the real save still happens on pointerup -
+   * so a drag streams as cheaply as a cursor does.
+   */
+  const lastStream = useRef(0)
+  const streamMove = useCallback((entries: Array<{ id: string; patch: Record<string, unknown> }>) => {
+    const now = Date.now()
+    if (now - lastStream.current < 16) return
+    lastStream.current = now
+    for (const entry of entries) {
+      liveRef.current?.send("item.upsert", { id: entry.id, patch: entry.patch })
+    }
   }, [])
 
   const updateLocal = useCallback((id: string, patch: Partial<BoardItem>) => {
@@ -1139,17 +1155,24 @@ export default function Canvas({
     if (d.kind === "move") {
       const group = groupRef.current
       if (group && group.length > 1) {
-        group.forEach((g) => {
-          updateLocal(g.id, { x: Math.round(g.x + dx), y: Math.round(g.y + dy) })
-        })
+        const moved = group.map((g) => ({
+          id: g.id,
+          patch: { x: Math.round(g.x + dx), y: Math.round(g.y + dy) },
+        }))
+        moved.forEach((m) => updateLocal(m.id, m.patch as Partial<BoardItem>))
+        streamMove(moved)
       } else {
-        updateLocal(d.id, { x: Math.round(d.itemX + dx), y: Math.round(d.itemY + dy) })
+        const patch = { x: Math.round(d.itemX + dx), y: Math.round(d.itemY + dy) }
+        updateLocal(d.id, patch)
+        streamMove([{ id: d.id, patch }])
       }
     } else {
-      updateLocal(d.id, {
+      const patch = {
         width: Math.max(120, Math.round(d.w + dx)),
         height: Math.max(56, Math.round(d.h + dy)),
-      })
+      }
+      updateLocal(d.id, patch)
+      streamMove([{ id: d.id, patch }])
     }
   }
 
@@ -1574,7 +1597,17 @@ export default function Canvas({
                 height: item.height,
                 // Text floats above other cards, and whatever you are working
                 // on floats above everything, so overlapping stays usable.
-                zIndex: isEditing ? 40 : isSelected ? 30 : isText ? 20 : 1,
+                // Freehand ink is an annotation layer: it draws over any card,
+                // and its bounding box lets clicks through except on the line.
+                zIndex: isEditing
+                  ? 40
+                  : isSelected
+                    ? 30
+                    : item.shape === "freehand"
+                      ? 25
+                      : isText
+                        ? 20
+                        : 1,
                 ...((isPlain || item.kind === "sticky") && style.fill
                   ? { background: style.fill }
                   : {}),
