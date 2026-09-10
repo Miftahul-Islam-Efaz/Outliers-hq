@@ -28,7 +28,10 @@ let cache: { at: number; values: Map<string, string>; error: string | null } | n
 let inFlight: Promise<{ values: Map<string, string>; error: string | null }> | null = null
 
 function secret() {
-  return process.env.AUTH_SECRET || ""
+  // Pasting into a hosting dashboard often drags along whitespace, a newline
+  // or wrapping quotes. Those are not a different secret, so normalise here
+  // as well as in the Postgres accessor.
+  return (process.env.AUTH_SECRET || "").trim().replace(/^["']|["']$/g, "")
 }
 
 async function load(): Promise<{ values: Map<string, string>; error: string | null }> {

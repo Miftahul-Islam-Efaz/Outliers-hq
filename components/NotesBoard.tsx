@@ -156,7 +156,9 @@ export default function NotesBoard({
           body: JSON.stringify({ text: raw }),
         })
         const data = await res.json().catch(() => null)
-        if (res.status === 401 || res.status === 429) {
+        // 503 means the server itself cannot reach the model (missing key,
+        // bad model name). Retrying is pointless and just doubles the error.
+        if (res.status === 401 || res.status === 429 || res.status === 503 || data?.fatal) {
           setAiError(data?.error || "Too many requests — wait a moment and try again.")
           return
         }
@@ -388,7 +390,7 @@ export default function NotesBoard({
               onChange={(e) => setRaw(e.target.value)}
             />
 
-            {aiError ? <div className="ai-error">{aiError}</div> : null}
+            <div className="ai-error" role="status">{aiError}</div>
 
             <div className="ai-foot">
               <span className="ai-count">{raw.length} characters</span>

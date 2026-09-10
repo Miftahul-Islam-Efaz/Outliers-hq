@@ -1896,7 +1896,11 @@ textarea {
 .ai-error {
   margin-top: 10px;
   font-size: 12px;
+  line-height: 16px;
   color: #FFB4A0;
+  /* Always occupies its line so showing a message cannot shove the
+     Organize button down under the cursor mid-click. */
+  min-height: 16px;
 }
 
 .ai-foot {

@@ -1,7 +1,8 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { apiFetch, withBase } from "@/lib/base"
+import { createClient, type RealtimeChannel, type SupabaseClient } from "@supabase/supabase-js"
+import { apiFetch } from "@/lib/base"
 
 export type LiveKind =
   | "cursor"
@@ -19,28 +20,44 @@ export type Peer = { userId: string; editing: string | null }
 
 export type Cursor = { userId: string; x: number; y: number; at: number }
 
-/** Cursor moves are streamed at most this often (ms). */
+/** Cursor moves are broadcast at most this often (ms). */
 const CURSOR_GAP = 50
-/** A cursor disappears after this much silence (ms). */
+/** A cursor fades after this much silence from someone not in presence. */
 const CURSOR_TTL = 15_000
-/** Keep-alive so the server knows we are still here. */
-const PING_MS = 15_000
+
+/** One shared socket per tab, even if several boards mount. */
+let clientPromise: Promise<SupabaseClient | null> | null = null
+
+function getRealtimeClient(): Promise<SupabaseClient | null> {
+  if (clientPromise) return clientPromise
+  clientPromise = apiFetch("/api/realtime-config")
+    .then((res) => (res.ok ? res.json() : null))
+    .then((cfg: { url?: string; key?: string } | null) => {
+      if (!cfg?.url || !cfg?.key) return null
+      return createClient(cfg.url, cfg.key, {
+        auth: { persistSession: false, autoRefreshToken: false },
+        // Cursors are chatty; cap the rate so a fast mouse cannot flood the
+        // socket or burn through the free-tier message allowance.
+        realtime: { params: { eventsPerSecond: 20 } },
+      })
+    })
+    .catch(() => null)
+  return clientPromise
+}
 
 /**
- * Connects the board to the live stream.
+ * Connects the board to Supabase Realtime.
  *
- * `onEvent` receives everyone else's changes. Sending is fire-and-forget so a
- * slow network can never block the local interaction.
+ * This replaces the old in-process SSE hub. That hub held every connected
+ * client in one server's memory, which works on a single long-lived Node
+ * process but cannot work on serverless hosting: two people routed to
+ * different instances never saw each other, and long streams were cut off
+ * mid-flight. Supabase Realtime is a persistent service both browsers reach
+ * directly.
  *
- * Three things were making this feel slow and flaky:
- *  - every pointer move fired its own POST, so a fast mouse queued dozens of
- *    round trips; cursor moves are now coalesced and sent on an animation
- *    frame, keeping only the newest position,
- *  - the cursor TTL (6s) was shorter than a normal pause in mouse movement,
- *    so idle teammates vanished; the TTL is longer now and presence keeps
- *    connected people alive,
- *  - a dropped EventSource left the hook stuck "offline" with stale peers;
- *    it now reconnects with backoff and resyncs presence.
+ * Broadcast messages are ephemeral - they never touch the database, so this
+ * adds no rows, no reads and no storage. Presence handles join/leave, which
+ * is what actually fixes teammates' cursors disappearing.
  */
 export function useLive(
   boardId: string,
@@ -57,7 +74,9 @@ export function useLive(
   const handler = useRef(onEvent)
   handler.current = onEvent
 
-  // Coalesced cursor state.
+  const channelRef = useRef<RealtimeChannel | null>(null)
+  const readyRef = useRef(false)
+  const editingRef = useRef<string | null>(null)
   const pending = useRef<{ x: number; y: number } | null>(null)
   const frame = useRef<number | null>(null)
   const lastCursor = useRef(0)
@@ -65,87 +84,109 @@ export function useLive(
   peersRef.current = peers
 
   useEffect(() => {
-    if (!boardId) return
-    let closed = false
-    let source: EventSource | null = null
-    let retry: ReturnType<typeof setTimeout> | null = null
-    let attempts = 0
+    if (!boardId || !meId) return
+    let cancelled = false
+    let channel: RealtimeChannel | null = null
 
-    const connect = () => {
-      if (closed) return
-      const url = withBase(
-        "/api/live?boardId=" + encodeURIComponent(boardId) + "&clientId=" + clientId,
-      )
-      source = new EventSource(url)
+    void getRealtimeClient().then((client) => {
+      if (cancelled || !client) return
 
-      source.onopen = () => {
-        attempts = 0
-        setOnline(true)
+      channel = client.channel("board:" + boardId, {
+        config: {
+          broadcast: { self: false },
+          presence: { key: clientId },
+        },
+      })
+      channelRef.current = channel
+
+      // Presence is the source of truth for who is on the board.
+      const syncPresence = () => {
+        if (!channel) return
+        const state = channel.presenceState<{ userId: string; editing: string | null }>()
+        const seen = new Map<string, Peer>()
+        for (const entries of Object.values(state)) {
+          for (const entry of entries) {
+            if (!entry?.userId) continue
+            const existing = seen.get(entry.userId)
+            // With two tabs open, whichever tab is editing wins.
+            seen.set(entry.userId, {
+              userId: entry.userId,
+              editing: entry.editing ?? existing?.editing ?? null,
+            })
+          }
+        }
+        const next = [...seen.values()]
+        setPeers(next)
+
+        // Anyone no longer present loses their cursor straight away.
+        const here = new Set(next.map((p) => p.userId))
+        setCursors((prev) => {
+          const kept = prev.filter((c) => here.has(c.userId))
+          return kept.length === prev.length ? prev : kept
+        })
       }
 
-      source.onerror = () => {
-        setOnline(false)
-        // EventSource retries on its own, but a hard failure (proxy reset,
-        // stream killed mid-flight) leaves it dead. Rebuild it ourselves.
-        if (closed || !source || source.readyState !== EventSource.CLOSED) return
-        source.close()
-        source = null
-        attempts += 1
-        const wait = Math.min(1000 * 2 ** (attempts - 1), 10_000)
-        retry = setTimeout(connect, wait)
-      }
+      channel.on("presence", { event: "sync" }, syncPresence)
+      channel.on("presence", { event: "join" }, syncPresence)
+      channel.on("presence", { event: "leave" }, syncPresence)
 
-      source.onmessage = (raw) => {
-        let event: Incoming
-        try {
-          event = JSON.parse(raw.data)
-        } catch {
-          return
+      channel.on("broadcast", { event: "cursor" }, ({ payload }) => {
+        const data = payload as {
+          senderId?: string
+          clientId?: string
+          x?: number
+          y?: number
         }
-        if (event.clientId === clientId) return
+        if (!data || data.clientId === clientId) return
+        if (typeof data.x !== "number" || typeof data.y !== "number") return
+        const senderId = String(data.senderId || "")
+        if (!senderId || senderId === meId) return
+        setCursors((prev) => {
+          const rest = prev.filter((c) => c.userId !== senderId)
+          return [...rest, { userId: senderId, x: data.x as number, y: data.y as number, at: Date.now() }]
+        })
+      })
 
-        if (event.type === "hello") {
-          setOnline(true)
-          const payload = event.payload as { presence?: Peer[] } | undefined
-          setPeers(payload?.presence || [])
-          return
-        }
-        if (event.type === "presence") {
-          const next = (event.payload as Peer[]) || []
-          setPeers(next)
-          // Someone who left the board should lose their cursor immediately.
-          const here = new Set(next.map((p) => p.userId))
-          setCursors((prev) => {
-            const kept = prev.filter((c) => here.has(c.userId))
-            return kept.length === prev.length ? prev : kept
-          })
-          return
-        }
-        if (event.type === "cursor") {
-          const point = event.payload as { x: number; y: number }
-          if (!point || typeof point.x !== "number") return
-          setCursors((prev) => {
-            const rest = prev.filter((c) => c.userId !== event.senderId)
-            return [...rest, { userId: event.senderId, x: point.x, y: point.y, at: Date.now() }]
-          })
-          return
+      // Everything else (item/edge changes, editing badges) is forwarded to
+      // the board unchanged, so callers keep the same event shape as before.
+      channel.on("broadcast", { event: "live" }, ({ payload }) => {
+        const event = payload as Incoming
+        if (!event || event.clientId === clientId) return
+        if (event.type === "editing") {
+          // Editing state rides on presence too, so just resync.
+          syncPresence()
         }
         handler.current(event)
-      }
-    }
+      })
 
-    connect()
+      void channel.subscribe((status) => {
+        if (cancelled) return
+        const connected = status === "SUBSCRIBED"
+        readyRef.current = connected
+        setOnline(connected)
+        if (connected && channel) {
+          void channel.track({ userId: meId, editing: editingRef.current })
+        }
+      })
+    })
 
     return () => {
-      closed = true
-      if (retry) clearTimeout(retry)
-      source?.close()
+      cancelled = true
+      readyRef.current = false
+      const active = channel
+      channelRef.current = null
       setOnline(false)
+      setPeers([])
+      setCursors([])
+      if (active) {
+        void active.untrack().catch(() => {})
+        void active.unsubscribe().catch(() => {})
+      }
     }
-  }, [boardId, clientId])
+  }, [boardId, meId, clientId])
 
-  // Drop cursors of people who went quiet, but never drop someone who is
-  // still listed in presence — they are connected, just not moving.
+  // Safety net: drop cursors from anyone who went quiet and is not in
+  // presence. People who are connected but idle keep their cursor.
   useEffect(() => {
     const timer = setInterval(() => {
       setCursors((prev) => {
@@ -161,24 +202,27 @@ export function useLive(
 
   const send = useCallback(
     (type: LiveKind, payload?: unknown) => {
-      if (!boardId) return
-      void apiFetch("/api/live", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ boardId, clientId, type, payload }),
-        keepalive: true,
-      }).catch(() => {})
-    },
-    [boardId, clientId],
-  )
+      const channel = channelRef.current
+      if (!channel || !readyRef.current) return
 
-  // Heartbeat: tells the server this tab is alive so the stale sweeper does
-  // not evict us and wipe our cursor for everyone else.
-  useEffect(() => {
-    if (!boardId) return
-    const timer = setInterval(() => send("ping"), PING_MS)
-    return () => clearInterval(timer)
-  }, [boardId, send])
+      // "editing" also updates presence so a late joiner sees the badge.
+      if (type === "editing") {
+        const itemId = (payload as { itemId?: string | null } | undefined)?.itemId ?? null
+        editingRef.current = itemId
+        void channel.track({ userId: meId, editing: itemId })
+      }
+
+      // Heartbeats are unnecessary now: presence is maintained by the socket.
+      if (type === "ping") return
+
+      void channel.send({
+        type: "broadcast",
+        event: "live",
+        payload: { type, senderId: meId, clientId, payload },
+      })
+    },
+    [meId, clientId],
+  )
 
   const flushCursor = useCallback(() => {
     frame.current = null
@@ -186,18 +230,29 @@ export function useLive(
     if (!point) return
     const now = Date.now()
     if (now - lastCursor.current < CURSOR_GAP) {
-      // Too soon: come back on the next frame with the newest position.
+      // Too soon: come back next frame with the newest position.
       frame.current = requestAnimationFrame(flushCursor)
       return
     }
+    const channel = channelRef.current
+    if (!channel || !readyRef.current) return
     pending.current = null
     lastCursor.current = now
-    send("cursor", { x: Math.round(point.x), y: Math.round(point.y) })
-  }, [send])
+    void channel.send({
+      type: "broadcast",
+      event: "cursor",
+      payload: {
+        senderId: meId,
+        clientId,
+        x: Math.round(point.x),
+        y: Math.round(point.y),
+      },
+    })
+  }, [meId, clientId])
 
   /**
    * Coalesced: pointermove fires far faster than the network can keep up, so
-   * we keep only the latest position and ship it once per frame.
+   * only the latest position is kept and shipped once per frame.
    */
   const sendCursor = useCallback(
     (x: number, y: number) => {
@@ -217,7 +272,8 @@ export function useLive(
   )
 
   const editingBy = useCallback(
-    (itemId: string) => peers.find((p) => p.editing === itemId && p.userId !== meId)?.userId || null,
+    (itemId: string) =>
+      peers.find((p) => p.editing === itemId && p.userId !== meId)?.userId || null,
     [peers, meId],
   )
 
