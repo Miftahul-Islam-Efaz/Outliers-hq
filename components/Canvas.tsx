@@ -2,7 +2,7 @@
 
 import { apiFetch } from "@/lib/base"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import type { BoardEdge, BoardItem, ItemStyle, User } from "@/lib/db"
+import type { BoardEdge, BoardItem, BoardMessage, ItemStyle, User } from "@/lib/db"
 import { initials } from "@/lib/links"
 import { useLive } from "@/lib/useLive"
 import LiveCursors from "./LiveCursors"
@@ -434,6 +434,13 @@ export default function Canvas({
       }
       return
     }
+    if (event.type === "chat" && data?.message) {
+      const incoming = data.message as BoardMessage
+      setMessages((prev) =>
+        prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
+      )
+      return
+    }
     if (event.type === "item.remove" && data?.id) {
       setItems((prev) => prev.filter((i) => i.id !== data.id))
       setEdges((prev) => prev.filter((e) => e.from_item !== data.id && e.to_item !== data.id))
@@ -480,6 +487,11 @@ export default function Canvas({
 
   const userMap = useMemo(() => new Map(users.map((u) => [u.id, u])), [users])
   const [panelOpen, setPanelOpen] = useState(true)
+  // Board chat. Persisted for 24h only, delivered live over broadcast.
+  const [messages, setMessages] = useState<BoardMessage[]>([])
+  const [draft, setDraft] = useState("")
+  const [sending, setSending] = useState(false)
+  const chatEndRef = useRef<HTMLDivElement | null>(null)
   const roster = useMemo(
     () => [
       { userId: me.id, editing: editing },
@@ -487,6 +499,53 @@ export default function Canvas({
     ],
     [live.peers, me.id, editing],
   )
+  // Fetch recent history once per board. The route also purges >24h rows.
+  useEffect(() => {
+    let cancelled = false
+    apiFetch("/api/messages?boardId=" + boardId)
+      .then((res) => (res.ok ? res.json() : { messages: [] }))
+      .then((data) => {
+        if (!cancelled) setMessages((data?.messages || []) as BoardMessage[])
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [boardId])
+
+  // Keep the transcript pinned to the newest message.
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ block: "nearest" })
+  }, [messages.length])
+
+  const sendMessage = useCallback(async () => {
+    const body = draft.trim()
+    if (!body || sending) return
+    setSending(true)
+    setDraft("")
+    try {
+      const res = await apiFetch("/api/messages", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ boardId, body }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.message) {
+        setToast(data?.error || "Could not send that message")
+        setDraft(body)
+        return
+      }
+      const saved = data.message as BoardMessage
+      setMessages((prev) => (prev.some((m) => m.id === saved.id) ? prev : [...prev, saved]))
+      liveRef.current?.send("chat", { message: saved })
+    } catch {
+      setToast("Could not send that message")
+      setDraft(body)
+    } finally {
+      setSending(false)
+    }
+  }, [boardId, draft, sending])
+
   const colorOf = (id: string) => userMap.get(id)?.color || "#8d8a84"
   const nameOf = (id: string) => userMap.get(id)?.display_name || "Another member"
   const ownedByMe = (item: { created_by: string }) => item.created_by === me.id
@@ -2064,6 +2123,64 @@ export default function Canvas({
               ) : null}
             </section>
 
+            <section className="board-panel-section chat">
+              <div className="board-panel-label">
+                Chat
+                <span className="board-panel-count">24h</span>
+              </div>
+
+              <div className="chat-log">
+                {messages.length === 0 ? (
+                  <p className="board-panel-hint">No messages yet. Say hello.</p>
+                ) : (
+                  messages.map((msg) => {
+                    const mine = msg.user_id === me.id
+                    return (
+                      <div key={msg.id} className={"chat-msg" + (mine ? " mine" : "")}>
+                        {!mine ? (
+                          <span
+                            className="avatar sm"
+                            style={{ background: colorOf(msg.user_id) }}
+                          >
+                            {initials(nameOf(msg.user_id))}
+                          </span>
+                        ) : null}
+                        <div className="chat-bubble-wrap">
+                          {!mine ? (
+                            <span className="chat-who">{nameOf(msg.user_id)}</span>
+                          ) : null}
+                          <div className="chat-bubble">{msg.body}</div>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+                <div ref={chatEndRef} />
+              </div>
+
+              <form
+                className="chat-form"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  sendMessage()
+                }}
+              >
+                <input
+                  className="chat-input"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  placeholder="Message the board"
+                  maxLength={800}
+                />
+                <button
+                  type="submit"
+                  className="chat-send"
+                  disabled={!draft.trim() || sending}
+                >
+                  Send
+                </button>
+              </form>
+            </section>
             <p className="board-panel-tip">Drag to select · Ctrl + scroll to zoom</p>
           </div>
         ) : null}
@@ -2291,7 +2408,7 @@ export default function Canvas({
         </div>
       ) : null}
 
-      <div className="canvas-dock labelled flat" onPointerDown={(e) => e.stopPropagation()}>
+      <div className="canvas-dock labelled flat rail" onPointerDown={(e) => e.stopPropagation()}>
         <button
           className={"dock-btn" + (tool === "select" ? " on" : "")}
           onClick={() => {

@@ -87,3 +87,12 @@ export type BoardEdge = {
   to_item: string
   created_at?: string
 }
+
+/** Board chat row. Purged after 24h, so never treat it as durable. */
+export type BoardMessage = {
+	id: string
+	board_id: string
+	user_id: string
+	body: string
+	created_at: string
+}

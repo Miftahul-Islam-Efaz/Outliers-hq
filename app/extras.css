@@ -2397,3 +2397,189 @@ textarea {
   border-radius: 9px;
   cursor: pointer;
 }
+
+/* ---- Left tool rail (Milanote style) ---- */
+.canvas-dock.rail {
+  left: 0;
+  top: 0;
+  bottom: 0;
+  transform: none;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  width: 74px;
+  max-width: 74px;
+  padding: 14px 8px;
+  border-radius: 0;
+  border: 0;
+  border-right: 1px solid rgba(17, 17, 16, 0.09);
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 0 24px rgba(17, 17, 16, 0.06);
+  overflow-y: auto;
+  overflow-x: hidden;
+  z-index: 39;
+}
+
+.canvas-dock.rail .dock-btn {
+  width: 58px;
+  min-width: 58px;
+  height: auto;
+  padding: 8px 2px;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 12px;
+}
+
+.canvas-dock.rail .dock-btn span {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.canvas-dock.rail .dock-btn.sm {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+}
+
+.canvas-dock.rail .dock-sep {
+  width: 42px;
+  height: 1px;
+  margin: 7px 0;
+}
+
+.canvas-dock.rail .zoom-group {
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.canvas-dock.rail .zoom-value {
+  min-width: 0;
+  width: 52px;
+  font-size: 11px;
+}
+
+/* The board panel moves to the right so the rail owns the left edge. */
+.board-panel {
+  left: auto;
+  right: 14px;
+  top: 14px;
+  bottom: 14px;
+  width: 268px;
+  display: flex;
+  flex-direction: column;
+}
+
+.board-panel.collapsed {
+  width: 46px;
+  bottom: auto;
+}
+
+.board-panel-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.board-panel-section.chat {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.chat-log {
+  flex: 1;
+  min-height: 90px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+}
+
+.chat-msg {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.chat-msg.mine {
+  justify-content: flex-end;
+}
+
+.chat-bubble-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 82%;
+}
+
+.chat-who {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8d8a84;
+}
+
+.chat-bubble {
+  padding: 6px 9px;
+  border-radius: 12px 12px 12px 3px;
+  background: rgba(17, 17, 16, 0.055);
+  color: #23281f;
+  font-size: 12.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.chat-msg.mine .chat-bubble {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 12px 12px 3px 12px;
+}
+
+.chat-form {
+  display: flex;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.chat-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 9px;
+  font-size: 12.5px;
+  color: #23281f;
+  background: #fff;
+  border: 1px solid rgba(17, 17, 16, 0.14);
+  border-radius: 9px;
+}
+
+.chat-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.chat-send {
+  height: 32px;
+  padding: 0 11px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent);
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.chat-send:disabled {
+  opacity: 0.45;
+  cursor: default;
+}

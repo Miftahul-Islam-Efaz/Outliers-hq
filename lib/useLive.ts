@@ -13,6 +13,7 @@ export type LiveKind =
   | "item.move"
   | "edge.add"
   | "edge.remove"
+  | "chat"
 
 export type Incoming = { type: string; senderId: string; clientId: string; payload?: unknown }
 
