@@ -2045,6 +2045,14 @@ export default function Canvas({
         {!selected && picked.length === 0 && tool === "select" && !wire ? (
           <div className="hud-card ghost">Drag to select · Ctrl + scroll to zoom</div>
         ) : null}
+        <div className={"live-status" + (live.online ? " on" : "")} role="status">
+          <span className="live-status-dot" />
+          {live.online
+            ? live.peers.length > 1
+              ? live.peers.length + " people on this board"
+              : "Live · you are the only one here"
+            : "Connecting to live board…"}
+        </div>
         {toast ? (
           <div className="board-toast" role="status">
             <span className="board-toast-dot" />

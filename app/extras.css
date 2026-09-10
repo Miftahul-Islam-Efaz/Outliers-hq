@@ -1695,9 +1695,13 @@ textarea {
 
 /* aspect-ratio sets the preferred height. Because the height stays auto,
    a long title simply pushes the tile taller instead of being clipped. */
-.tile-short { aspect-ratio: 1 / 0.75; }
-.tile-square { aspect-ratio: 1 / 1; }
-.tile-tall { aspect-ratio: 1 / 1.4; }
+/* Every tile is the same size now. Height is fixed rather than a floor so a
+   long idea can never stretch its tile; the full text lives in the reader. */
+.tile {
+  aspect-ratio: 1 / 1;
+  cursor: pointer;
+}
+.tile:focus-visible { outline: 3px solid #1d4ed8; outline-offset: 2px; }
 
 /* Text and art take opposite ends of the tile. */
 .tile-copy { position: relative; z-index: 2; }
@@ -1741,6 +1745,10 @@ textarea {
   margin: 0;
   max-width: 90%;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .tile-desc {
@@ -1791,22 +1799,95 @@ textarea {
 .tile-vote {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 4px;
   font-size: 11px;
+  font-weight: 600;
   line-height: 1;
-  padding: 3px 6px;
+  padding: 5px 8px;
   border: 1px solid currentColor;
   border-radius: 0;
+  /* A tinted plate lifts the control off the line art behind it. */
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  color: inherit;
+  cursor: pointer;
+  opacity: 1;
+  transition: background 160ms ease;
+}
+
+.tile-vote:hover { background: color-mix(in srgb, currentColor 26%, transparent); }
+.tile-vote.on { background: currentColor; color: var(--tile-bg, #2B302A); font-weight: 700; }
+.tile-vote.on svg { color: inherit; }
+.tile-vote svg { width: 13px; height: 13px; }
+
+/* Footer sits above the art on its own plate so it always reads. */
+.tile-foot { opacity: 1; }
+.tile-author { opacity: 0.75; }
+
+/* --- Idea reader ---------------------------------------------------------- */
+.reader-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: rgba(20, 22, 19, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.reader {
+  position: relative;
+  width: min(680px, 100%);
+  max-height: 80vh;
+  overflow: auto;
+  background: #EDEAE0;
+  color: #23281F;
+  padding: 32px 32px 36px;
+  border-radius: 0;
+}
+
+.reader-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  border: 1px solid currentColor;
   background: transparent;
   color: inherit;
   cursor: pointer;
-  opacity: 0.75;
-  transition: opacity 160ms ease;
 }
 
-.tile-vote:hover { opacity: 1; }
-.tile-vote.on { opacity: 1; font-weight: 700; }
-.tile-vote svg { width: 12px; height: 12px; }
+.reader-cat {
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  opacity: 0.7;
+  margin-bottom: 10px;
+}
+
+.reader-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 32px;
+  line-height: 1.15;
+  font-weight: 400;
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.reader-meta { font-size: 12px; opacity: 0.65; margin-bottom: 18px; }
+
+.reader-desc {
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+.reader-link { display: inline-block; margin-top: 16px; font-size: 13px; overflow-wrap: anywhere; }
 
 /* --- Split composer + AI box ---------------------------------------------- */
 .composer-split {
@@ -1972,3 +2053,47 @@ textarea {
 }
 
 .search-wide { flex: 1 1 420px; max-width: none; }
+
+/* --- Live connection status ---------------------------------------------- */
+.live-status {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 30;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 10px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  color: #6b6b6b;
+  pointer-events: none;
+}
+
+.live-status.on { color: #23281F; }
+
+.live-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c9a227;
+}
+
+.live-status.on .live-status-dot { background: #16a34a; }
+
+.reader-thumb {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  object-fit: cover;
+  margin-top: 18px;
+}
+
+.reader-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+
+.reader-tag {
+  font-size: 11px;
+  padding: 3px 8px;
+  border: 1px solid rgba(35, 40, 31, 0.3);
+}

@@ -7,7 +7,7 @@ import { CATEGORIES, initials, timeAgo } from "@/lib/links"
 import { IconDown, IconPlus, IconSearch, IconTrash, IconUp } from "./Icons"
 import ConfirmDialog from "./ConfirmDialog"
 import TileArt from "./TileArt"
-import { artAtTop, artFor, ASPECT, assignSwatches, hashId, sizeFor } from "@/lib/mosaic"
+import { artAtTop, artFor, assignSwatches, hashId } from "@/lib/mosaic"
 
 type Preview = {
   provider: string
@@ -44,6 +44,8 @@ export default function NotesBoard({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Note | null>(null)
+  /** The idea opened in the reader overlay. */
+  const [reading, setReading] = useState<Note | null>(null)
 
   // --- AI box state ---------------------------------------------------------
   const [raw, setRaw] = useState("")
@@ -254,6 +256,44 @@ export default function NotesBoard({
 
   return (
     <>
+      {reading ? (
+        <div className="reader-veil" onClick={() => setReading(null)}>
+          <div
+            className="reader"
+            role="dialog"
+            aria-modal="true"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="reader-close" onClick={() => setReading(null)} aria-label="Close">
+              Close
+            </button>
+            <div className="reader-cat">{reading.category || "Idea"}</div>
+            <h2 className="reader-title">{reading.title}</h2>
+            <div className="reader-meta">
+              {userMap.get(reading.author_id)?.display_name || "Unknown"} · {timeAgo(reading.created_at)}
+            </div>
+            {reading.description ? <p className="reader-desc">{reading.description}</p> : null}
+            {reading.link_thumbnail ? (
+              <img className="reader-thumb" src={reading.link_thumbnail} alt="" />
+            ) : null}
+            {reading.link_url ? (
+              <a className="reader-link" href={reading.link_url} target="_blank" rel="noreferrer">
+                {reading.link_title || reading.link_url}
+              </a>
+            ) : null}
+            {reading.tags && reading.tags.length ? (
+              <div className="reader-tags">
+                {reading.tags.map((t) => (
+                  <span className="reader-tag" key={t}>
+                    {t}
+                  </span>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       {pendingDelete ? (
         <ConfirmDialog
           title={"Delete “" + pendingDelete.title + "”?"}
@@ -468,19 +508,27 @@ export default function NotesBoard({
               arr.map((r) => userMap.get(r.user_id)?.display_name || "Someone").join(", ")
 
             const hash = hashId(note.id)
-            const size = sizeFor(hash)
             const swatch = swatches[index]
             const topArt = artAtTop(hash)
 
             return (
               <article
-                className={"tile tile-" + size + (topArt ? " art-top" : "")}
+                className={"tile" + (topArt ? " art-top" : "")}
                 key={note.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setReading(note)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    setReading(note)
+                  }
+                }}
                 style={{
                   background: swatch.bg,
                   color: swatch.fg,
                   ["--tile-ink" as string]: swatch.fg,
-                  ["--tile-aspect" as string]: ASPECT[size],
+                  ["--tile-bg" as string]: swatch.bg,
                 }}
               >
                 <TileArt variant={artFor(hash)} color={swatch.fg} />
@@ -488,7 +536,7 @@ export default function NotesBoard({
                 <div className="tile-copy">
                   <div className="tile-cat">{note.category || "Idea"}</div>
                   <h3 className="tile-title">{note.title}</h3>
-                  {size !== "short" && note.description ? (
+                  {note.description ? (
                     <p className="tile-desc">{note.description}</p>
                   ) : null}
                 </div>
@@ -501,14 +549,14 @@ export default function NotesBoard({
                   <span className="tile-votes">
                     <button
                       className={"tile-vote" + (mine === 1 ? " on" : "")}
-                      onClick={() => react(note.id, 1)}
+                      onClick={(e) => { e.stopPropagation(); react(note.id, 1) }}
                       title={ups.length ? "Liked by " + names(ups) : "Like this"}
                     >
                       <IconUp /> {ups.length}
                     </button>
                     <button
                       className={"tile-vote" + (mine === -1 ? " on" : "")}
-                      onClick={() => react(note.id, -1)}
+                      onClick={(e) => { e.stopPropagation(); react(note.id, -1) }}
                       title={downs.length ? "Disliked by " + names(downs) : "Not for me"}
                     >
                       <IconDown /> {downs.length}
@@ -516,7 +564,7 @@ export default function NotesBoard({
                     {note.author_id === me.id ? (
                       <button
                         className="tile-vote"
-                        onClick={() => setPendingDelete(note)}
+                        onClick={(e) => { e.stopPropagation(); setPendingDelete(note) }}
                         aria-label="Delete my note"
                         title="Delete my note"
                       >
