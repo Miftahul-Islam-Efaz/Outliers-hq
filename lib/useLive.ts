@@ -112,11 +112,14 @@ export function useLive(
     if (!boardId || !meId) return
     let cancelled = false
     let channel: RealtimeChannel | null = null
+    let liveClient: SupabaseClient | null = null
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
 
     setStatus("connecting")
 
     void getRealtimeClient().then((client) => {
       if (cancelled) return
+      liveClient = client
 
       channel = client.channel("board:" + boardId, {
         config: {
@@ -191,19 +194,37 @@ export function useLive(
         const connected = state === "SUBSCRIBED"
         readyRef.current = connected
         setOnline(connected)
+        // Always keep the raw state visible; guessing at causes cost us days.
+        // eslint-disable-next-line no-console
+        console.info("[live] channel " + state, err || "")
         if (connected) {
           setStatus("online")
           setDetail(null)
         } else if (state === "CHANNEL_ERROR") {
           setStatus("channel-error")
-          setDetail(err?.message || "the realtime service refused the channel")
+          setDetail(err?.message || "CHANNEL_ERROR")
         } else if (state === "TIMED_OUT") {
           setStatus("timed-out")
-          setDetail("the socket did not answer in time")
+          setDetail("TIMED_OUT")
         } else if (state === "CLOSED") {
           setStatus("closed")
-          setDetail(null)
+          setDetail("CLOSED")
         }
+
+        // A dropped channel never recovers on its own, so schedule a rejoin
+        // instead of sitting there dead until someone notices.
+        if (!connected && !retryTimer) {
+          retryTimer = setTimeout(() => {
+            retryTimer = null
+            if (!cancelled) setAttempt((n) => n + 1)
+          }, 4000)
+        }
+
+        if (connected && retryTimer) {
+          clearTimeout(retryTimer)
+          retryTimer = null
+        }
+
         if (connected && channel) {
           void channel.track({ userId: meId, editing: editingRef.current })
           const backlog = queued.current
@@ -233,9 +254,14 @@ export function useLive(
       setOnline(false)
       setPeers([])
       setCursors([])
+      if (retryTimer) clearTimeout(retryTimer)
       if (active) {
         void active.untrack().catch(() => {})
-        void active.unsubscribe().catch(() => {})
+        if (liveClient) {
+          void liveClient.removeChannel(active).catch(() => {})
+        } else {
+          void active.unsubscribe().catch(() => {})
+        }
       }
     }
   }, [boardId, meId, clientId, attempt])
