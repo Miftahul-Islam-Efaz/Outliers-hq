@@ -2583,3 +2583,70 @@ textarea {
   opacity: 0.45;
   cursor: default;
 }
+
+/* ---- Fit the rail, keep image ratio ---- */
+
+/* Show the whole picture instead of cropping it to the card box. */
+.item-thumb.full {
+  object-fit: contain;
+  background: rgba(17, 17, 16, 0.04);
+}
+
+/* Link thumbnails keep their natural shape rather than a fixed 66px band. */
+.item-thumb {
+  height: auto;
+  max-height: 200px;
+  object-fit: contain;
+  background: rgba(17, 17, 16, 0.04);
+}
+
+/* The rail must fit without scrolling, so tighten every axis a little. */
+.canvas-dock.rail {
+  width: 66px;
+  max-width: 66px;
+  padding: 8px 6px;
+  gap: 0;
+  overflow: visible;
+  justify-content: center;
+}
+
+.canvas-dock.rail .dock-btn {
+  width: 54px;
+  min-width: 54px;
+  padding: 5px 2px;
+  gap: 2px;
+  border-radius: 10px;
+}
+
+.canvas-dock.rail .dock-btn span {
+  font-size: 9.5px;
+  line-height: 1.1;
+}
+
+.canvas-dock.rail .dock-btn.sm {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+}
+
+.canvas-dock.rail .dock-sep {
+  width: 34px;
+  margin: 4px 0;
+}
+
+.canvas-dock.rail .zoom-value {
+  height: 26px;
+  font-size: 10.5px;
+}
+
+/* The shape picker used to open upwards from the bottom dock. On a left
+   rail that puts it off-screen, so it now opens to the side. */
+.canvas-dock.rail .shape-menu,
+.canvas-dock.flat.rail .shape-menu {
+  bottom: auto;
+  top: 50%;
+  left: calc(100% + 10px);
+  transform: translateY(-50%);
+  flex-direction: column;
+  z-index: 60;
+}

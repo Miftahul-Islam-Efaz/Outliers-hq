@@ -367,6 +367,9 @@ export default function Canvas({
   const [zoom, setZoom] = useState(1)
   const [selected, setSelected] = useState<string | null>(null)
   const [editing, setEditing] = useState<string | null>(null)
+  /** Mirrors `editing` so the window paste listener can read it without
+   *  re-subscribing every time the open card changes. */
+  const editingRef2 = useRef<string | null>(null)
   const [tool, setTool] = useState<Tool>("select")
   const [shapeKind, setShapeKind] = useState("round")
   const [shapeMenu, setShapeMenu] = useState(false)
@@ -546,6 +549,8 @@ export default function Canvas({
     }
   }, [boardId, draft, sending])
 
+  editingRef2.current = editing
+
   const colorOf = (id: string) => userMap.get(id)?.color || "#8d8a84"
   const nameOf = (id: string) => userMap.get(id)?.display_name || "Another member"
   const ownedByMe = (item: { created_by: string }) => item.created_by === me.id
@@ -667,6 +672,31 @@ export default function Canvas({
     })
     if (!res.ok) setToast("Could not save that change")
   }, [])
+
+  /** Look up a link preview and store it on an existing card. */
+  const attachPreview = useCallback(
+    async (itemId: string, url: string) => {
+      try {
+        const res = await apiFetch("/api/preview?url=" + encodeURIComponent(url))
+        const data = await res.json().catch(() => ({}))
+        const preview = data?.preview
+        if (!preview) return
+        const patch = {
+          link_url: preview.url || url,
+          link_title: preview.title || null,
+          link_thumbnail: preview.thumbnail || null,
+          link_provider: preview.provider || null,
+          link_embed_url: preview.embedUrl || null,
+        }
+        updateLocal(itemId, patch)
+        patchItem(itemId, patch)
+      } catch {
+        /* A missing preview is not worth interrupting the user over. */
+      }
+    },
+    [patchItem],
+  )
+
 
   /**
    * Broadcast-only position updates, throttled to roughly one per frame.
@@ -1097,10 +1127,18 @@ export default function Canvas({
   useEffect(() => {
     async function onPaste(e: ClipboardEvent) {
       const target = e.target as HTMLElement | null
-      if (
-        target &&
+      const inField =
+        !!target &&
         (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-      ) {
+
+      if (inField) {
+        // Typing inside a card: if the paste is a bare URL, attach a preview
+        // to this card instead of stealing the paste from the text field.
+        const open = editingRef2.current
+        const pasted = (e.clipboardData?.getData("text/plain") || "").trim()
+        if (open && pasted && /^https?:/i.test(pasted) && !/\s/.test(pasted)) {
+          attachPreview(open, pasted)
+        }
         return
       }
       const rect = wrap.current?.getBoundingClientRect()
@@ -1131,7 +1169,7 @@ export default function Canvas({
     }
     window.addEventListener("paste", onPaste)
     return () => window.removeEventListener("paste", onPaste)
-  }, [addImageFile, placeItem, toBoard])
+  }, [addImageFile, attachPreview, placeItem, toBoard])
 
   function onWrapPointerDown(e: React.PointerEvent) {
     if (e.button !== 0 && e.button !== 1) return
