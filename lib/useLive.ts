@@ -105,6 +105,8 @@ export function useLive(
   const pending = useRef<{ x: number; y: number } | null>(null)
   const frame = useRef<number | null>(null)
   const lastCursor = useRef(0)
+  /** Grows while the channel keeps failing; reset once connected. */
+  const backoffRef = useRef(0)
   const peersRef = useRef<Peer[]>([])
   peersRef.current = peers
 
@@ -148,12 +150,9 @@ export function useLive(
         const next = [...seen.values()]
         setPeers(next)
 
-        // Anyone no longer present loses their cursor straight away.
-        const here = new Set(next.map((p) => p.userId))
-        setCursors((prev) => {
-          const kept = prev.filter((c) => here.has(c.userId))
-          return kept.length === prev.length ? prev : kept
-        })
+        // Deliberately NOT pruning cursors here. A cursor is only refreshed
+        // when that person moves their mouse, so dropping it on a presence
+        // blip hid idle teammates permanently. The sweep below expires them.
       }
 
       channel.on("presence", { event: "sync" }, syncPresence)
@@ -211,18 +210,22 @@ export function useLive(
           setDetail("CLOSED")
         }
 
-        // A dropped channel never recovers on its own, so schedule a rejoin
-        // instead of sitting there dead until someone notices.
-        if (!connected && !retryTimer) {
+        // A dropped channel never recovers on its own, so schedule a rejoin.
+        // The delay grows each time: a flat retry turned every reconnect into
+        // another reconnect and the board blinked on and off indefinitely.
+        if (connected) {
+          backoffRef.current = 0
+          if (retryTimer) {
+            clearTimeout(retryTimer)
+            retryTimer = null
+          }
+        } else if (!retryTimer) {
+          const wait = Math.min(2000 * Math.pow(2, backoffRef.current), 30_000)
+          backoffRef.current += 1
           retryTimer = setTimeout(() => {
             retryTimer = null
             if (!cancelled) setAttempt((n) => n + 1)
-          }, 4000)
-        }
-
-        if (connected && retryTimer) {
-          clearTimeout(retryTimer)
-          retryTimer = null
+          }, wait)
         }
 
         if (connected && channel) {
@@ -253,7 +256,6 @@ export function useLive(
       channelRef.current = null
       setOnline(false)
       setPeers([])
-      setCursors([])
       if (retryTimer) clearTimeout(retryTimer)
       if (active) {
         void active.untrack().catch(() => {})
