@@ -2068,10 +2068,17 @@ textarea {
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid rgba(0, 0, 0, 0.12);
   color: #6b6b6b;
-  pointer-events: none;
+  cursor: pointer;
+  max-width: 46ch;
+  text-align: left;
+  line-height: 1.3;
 }
 
-.live-status.on { color: #23281F; }
+.live-status.on { color: #23281F; cursor: default; }
+
+.live-status.bad { color: #b91c1c; border-color: rgba(185, 28, 28, 0.35); }
+
+.live-status.bad .live-status-dot { background: #b91c1c; }
 
 .live-status-dot {
   width: 7px;

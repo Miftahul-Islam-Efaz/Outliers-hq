@@ -2045,14 +2045,27 @@ export default function Canvas({
         {!selected && picked.length === 0 && tool === "select" && !wire ? (
           <div className="hud-card ghost">Drag to select · Ctrl + scroll to zoom</div>
         ) : null}
-        <div className={"live-status" + (live.online ? " on" : "")} role="status">
+        <button
+          type="button"
+          className={"live-status" + (live.online ? " on" : "") + (live.status === "connecting" ? "" : live.online ? "" : " bad")}
+          onClick={() => live.retry()}
+          title={live.detail || "Live connection"}
+        >
           <span className="live-status-dot" />
           {live.online
             ? live.peers.length > 1
               ? live.peers.length + " people on this board"
               : "Live · you are the only one here"
-            : "Connecting to live board…"}
-        </div>
+            : live.status === "connecting"
+              ? "Connecting to live board…"
+              : live.status === "config-failed"
+                ? "Live off · " + (live.detail || "could not read realtime settings") + " · tap to retry"
+                : live.status === "channel-error"
+                  ? "Live off · " + (live.detail || "channel refused") + " · tap to retry"
+                  : live.status === "timed-out"
+                    ? "Live off · connection timed out · tap to retry"
+                    : "Live off · tap to reconnect"}
+        </button>
         {toast ? (
           <div className="board-toast" role="status">
             <span className="board-toast-dot" />

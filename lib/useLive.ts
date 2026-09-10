@@ -26,14 +26,29 @@ const CURSOR_GAP = 50
 const CURSOR_TTL = 15_000
 
 /** One shared socket per tab, even if several boards mount. */
-let clientPromise: Promise<SupabaseClient | null> | null = null
+let clientPromise: Promise<SupabaseClient> | null = null
 
-function getRealtimeClient(): Promise<SupabaseClient | null> {
+/** Why the last connection attempt failed, for the on-screen status. */
+export type LiveStatus =
+  | "connecting"
+  | "online"
+  | "config-failed"
+  | "channel-error"
+  | "timed-out"
+  | "closed"
+
+function getRealtimeClient(): Promise<SupabaseClient> {
   if (clientPromise) return clientPromise
   clientPromise = apiFetch("/api/realtime-config")
-    .then((res) => (res.ok ? res.json() : null))
-    .then((cfg: { url?: string; key?: string } | null) => {
-      if (!cfg?.url || !cfg?.key) return null
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.text().catch(() => "")
+        throw new Error("realtime-config HTTP " + res.status + " " + body.slice(0, 120))
+      }
+      return res.json() as Promise<{ url?: string; key?: string }>
+    })
+    .then((cfg) => {
+      if (!cfg?.url || !cfg?.key) throw new Error("realtime-config returned no url/key")
       return createClient(cfg.url, cfg.key, {
         auth: { persistSession: false, autoRefreshToken: false },
         // Cursors are chatty; cap the rate so a fast mouse cannot flood the
@@ -41,7 +56,11 @@ function getRealtimeClient(): Promise<SupabaseClient | null> {
         realtime: { params: { eventsPerSecond: 20 } },
       })
     })
-    .catch(() => null)
+    .catch((err) => {
+      // Drop the cached promise so the next attempt can genuinely retry.
+      clientPromise = null
+      throw err
+    })
   return clientPromise
 }
 
@@ -71,6 +90,10 @@ export function useLive(
   const [peers, setPeers] = useState<Peer[]>([])
   const [cursors, setCursors] = useState<Cursor[]>([])
   const [online, setOnline] = useState(false)
+  const [status, setStatus] = useState<LiveStatus>("connecting")
+  const [detail, setDetail] = useState<string | null>(null)
+  /** Bumped to force a fresh connection attempt. */
+  const [attempt, setAttempt] = useState(0)
   const handler = useRef(onEvent)
   handler.current = onEvent
 
@@ -90,8 +113,10 @@ export function useLive(
     let cancelled = false
     let channel: RealtimeChannel | null = null
 
+    setStatus("connecting")
+
     void getRealtimeClient().then((client) => {
-      if (cancelled || !client) return
+      if (cancelled) return
 
       channel = client.channel("board:" + boardId, {
         config: {
@@ -161,11 +186,24 @@ export function useLive(
         handler.current(event)
       })
 
-      void channel.subscribe((status) => {
+      void channel.subscribe((state, err) => {
         if (cancelled) return
-        const connected = status === "SUBSCRIBED"
+        const connected = state === "SUBSCRIBED"
         readyRef.current = connected
         setOnline(connected)
+        if (connected) {
+          setStatus("online")
+          setDetail(null)
+        } else if (state === "CHANNEL_ERROR") {
+          setStatus("channel-error")
+          setDetail(err?.message || "the realtime service refused the channel")
+        } else if (state === "TIMED_OUT") {
+          setStatus("timed-out")
+          setDetail("the socket did not answer in time")
+        } else if (state === "CLOSED") {
+          setStatus("closed")
+          setDetail(null)
+        }
         if (connected && channel) {
           void channel.track({ userId: meId, editing: editingRef.current })
           const backlog = queued.current
@@ -179,6 +217,12 @@ export function useLive(
           }
         }
       })
+    })
+    .catch((err: unknown) => {
+      if (cancelled) return
+      // This is the case that used to hang on "connecting" forever.
+      setStatus("config-failed")
+      setDetail(err instanceof Error ? err.message : String(err))
     })
 
     return () => {
@@ -194,7 +238,7 @@ export function useLive(
         void active.unsubscribe().catch(() => {})
       }
     }
-  }, [boardId, meId, clientId])
+  }, [boardId, meId, clientId, attempt])
 
   // Safety net: drop cursors from anyone who went quiet and is not in
   // presence. People who are connected but idle keep their cursor.
@@ -295,5 +339,11 @@ export function useLive(
     [peers, meId],
   )
 
-  return { peers, cursors, online, send, sendCursor, editingBy, clientId }
+  /** Throw away the cached client and connect again from scratch. */
+  const retry = useCallback(() => {
+    clientPromise = null
+    setAttempt((n) => n + 1)
+  }, [])
+
+  return { peers, cursors, online, status, detail, retry, send, sendCursor, editingBy, clientId }
 }
