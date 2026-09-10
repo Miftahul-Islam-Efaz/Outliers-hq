@@ -21,7 +21,7 @@ export type Peer = { userId: string; editing: string | null }
 export type Cursor = { userId: string; x: number; y: number; at: number }
 
 /** Cursor moves are broadcast at most this often (ms). */
-const CURSOR_GAP = 50
+const CURSOR_GAP = 16
 /** A cursor fades after this much silence from someone not in presence. */
 const CURSOR_TTL = 15_000
 
@@ -53,7 +53,7 @@ function getRealtimeClient(): Promise<SupabaseClient> {
         auth: { persistSession: false, autoRefreshToken: false },
         // Cursors are chatty; cap the rate so a fast mouse cannot flood the
         // socket or burn through the free-tier message allowance.
-        realtime: { params: { eventsPerSecond: 20 } },
+        realtime: { params: { eventsPerSecond: 64 } },
       })
     })
     .catch((err) => {
@@ -88,7 +88,14 @@ export function useLive(
     [],
   )
   const [peers, setPeers] = useState<Peer[]>([])
-  const [cursors, setCursors] = useState<Cursor[]>([])
+  /**
+   * Cursor positions are held in a ref and read by an animation loop.
+   * Putting them in state re-rendered the entire board on every incoming
+   * packet, which is what made teammate cursors crawl.
+   */
+  const cursorsRef = useRef<Map<string, Cursor>>(new Map())
+  /** Only who has a cursor - changes on join/leave, not on movement. */
+  const [cursorIds, setCursorIds] = useState<string[]>([])
   const [online, setOnline] = useState(false)
   const [status, setStatus] = useState<LiveStatus>("connecting")
   const [detail, setDetail] = useState<string | null>(null)
@@ -170,10 +177,15 @@ export function useLive(
         if (typeof data.x !== "number" || typeof data.y !== "number") return
         const senderId = String(data.senderId || "")
         if (!senderId || senderId === meId) return
-        setCursors((prev) => {
-          const rest = prev.filter((c) => c.userId !== senderId)
-          return [...rest, { userId: senderId, x: data.x as number, y: data.y as number, at: Date.now() }]
+        const known = cursorsRef.current.has(senderId)
+        cursorsRef.current.set(senderId, {
+          userId: senderId,
+          x: data.x as number,
+          y: data.y as number,
+          at: Date.now(),
         })
+        // No setState on movement: the render loop picks the new value up.
+        if (!known) setCursorIds([...cursorsRef.current.keys()])
       })
 
       // Everything else (item/edge changes, editing badges) is forwarded to
@@ -272,13 +284,16 @@ export function useLive(
   // presence. People who are connected but idle keep their cursor.
   useEffect(() => {
     const timer = setInterval(() => {
-      setCursors((prev) => {
-        const connected = new Set(peersRef.current.map((p) => p.userId))
-        const fresh = prev.filter(
-          (c) => connected.has(c.userId) || Date.now() - c.at < CURSOR_TTL,
-        )
-        return fresh.length === prev.length ? prev : fresh
-      })
+      const connected = new Set(peersRef.current.map((p) => p.userId))
+      let changed = false
+      for (const [id, cur] of cursorsRef.current) {
+        const keep = connected.has(id) || Date.now() - cur.at < CURSOR_TTL
+        if (!keep) {
+          cursorsRef.current.delete(id)
+          changed = true
+        }
+      }
+      if (changed) setCursorIds([...cursorsRef.current.keys()])
     }, 3000)
     return () => clearInterval(timer)
   }, [])
@@ -373,5 +388,5 @@ export function useLive(
     setAttempt((n) => n + 1)
   }, [])
 
-  return { peers, cursors, online, status, detail, retry, send, sendCursor, editingBy, clientId }
+  return { peers, cursorIds, cursorsRef, online, status, detail, retry, send, sendCursor, editingBy, clientId }
 }

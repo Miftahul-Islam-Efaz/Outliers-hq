@@ -1615,7 +1615,8 @@ textarea {
   display: flex;
   align-items: flex-start;
   gap: 4px;
-  transition: transform 90ms linear;
+  /* Positioned by an rAF loop in LiveCursors; a transition here would
+     only delay every frame it writes. */
   will-change: transform;
 }
 

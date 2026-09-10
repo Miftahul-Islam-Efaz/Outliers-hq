@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { BoardEdge, BoardItem, ItemStyle, User } from "@/lib/db"
 import { initials } from "@/lib/links"
 import { useLive } from "@/lib/useLive"
+import LiveCursors from "./LiveCursors"
 import {
   IconCard,
   IconConnect,
@@ -1418,20 +1419,12 @@ export default function Canvas({
         className="canvas-layer"
         style={{ transform: "translate(" + pan.x + "px," + pan.y + "px) scale(" + zoom + ")" }}
       >
-        {live.cursors.map((c) => (
-          <div
-            key={c.userId}
-            className="live-cursor"
-            style={{ transform: "translate(" + c.x + "px," + c.y + "px)" }}
-          >
-            <svg viewBox="0 0 16 16" width="16" height="16">
-              <path d="M2 1.5 L12.5 8 L7.6 8.6 L5.4 13 Z" fill={colorOf(c.userId)} stroke="#fff" strokeWidth="1" strokeLinejoin="round" />
-            </svg>
-            <span className="live-name" style={{ background: colorOf(c.userId) }}>
-              {nameOf(c.userId)}
-            </span>
-          </div>
-        ))}
+        <LiveCursors
+          cursorsRef={live.cursorsRef}
+          ids={live.cursorIds}
+          colorOf={colorOf}
+          nameOf={nameOf}
+        />
         {live.peers
           .filter((p) => p.editing && p.userId !== me.id)
           .map((p) => {
